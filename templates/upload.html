@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8">
+    <title>Wgrywanie pliku wycen</title>
+  </head>
+  <body>
+    <h2>Wgrywanie pliku do wyceny tras</h2>
+    <form method="post" enctype="multipart/form-data">
+      <div>
+        <label>Plik Excel:
+          <input type="file" name="file" accept=".xlsx,.xls" required>
+        </label>
+      </div>
+      <div>
+        <label>Koszt paliwa (PLN/km):
+          <input type="number" name="fuel_cost" step="0.01" required>
+        </label>
+      </div>
+      <div>
+        <label>Koszt kierowcy (PLN):
+          <input type="number" name="driver_cost" step="0.01" required>
+        </label>
+      </div>
+      <div>
+        <button type="submit">Rozpocznij przetwarzanie</button>
+      </div>
+    </form>
+  </body>
+</html>
