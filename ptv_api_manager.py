@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 import requests
 import logging
 
-# Konfiguracja loggera
-logging.basicConfig(level=logging.INFO)
+# Konfiguracja loggera - zmiana poziomu na WARNING aby ograniczyć logi
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 class PTVRequestQueue:
@@ -29,7 +29,6 @@ class PTVRequestQueue:
                     with self.lock:
                         self.results[request_id] = {'status': 'success', 'data': result}
                 except Exception as e:
-                    logger.error(f"Error in PTV request: {e}")
                     with self.lock:
                         self.results[request_id] = {'status': 'error', 'error': str(e)}
                 self.queue.task_done()
@@ -127,7 +126,7 @@ class PTVRouteManager:
             headers = {"apiKey": self.api_key}
             params = {
                 "waypoints": waypoints,
-                "results": "TOLL_COSTS,DISTANCE",
+                "results": "TOLL_COSTS,DISTANCE,POLYLINE",
                 "options[routingMode]": routing_mode,
                 "options[trafficMode]": "AVERAGE"
             }
@@ -142,15 +141,16 @@ class PTVRouteManager:
                     for idx, route_data in enumerate(data['routes']):
                         route_key = batch[idx]
                         distance_km = route_data['distance'] / 1000
-                        results[route_key] = distance_km
+                        polyline = route_data.get('polyline', '')
+                        results[route_key] = {'distance': distance_km, 'polyline': polyline}
                         # Zapisz w cache
                         coord_from, coord_to = batch[idx]
-                        self.cache_manager.set(coord_from, coord_to, distance_km, 
+                        self.cache_manager.set(coord_from, coord_to, {'distance': distance_km, 'polyline': polyline}, 
                                             avoid_switzerland, routing_mode)
                 else:
-                    logger.error(f"Błąd API PTV (batch): {response.status_code} - {response.text}")
+                    pass
             except Exception as e:
-                logger.error(f"Wyjątek w batch processing: {e}")
+                pass
                 
         return results
 
@@ -166,34 +166,77 @@ class PTVRouteManager:
         def _make_request():
             base_url = "https://api.myptv.com/routing/v1/routes"
             headers = {"apiKey": self.api_key}
-            params = {
-                "waypoints": [f"{coord_from[0]},{coord_from[1]}", f"{coord_to[0]},{coord_to[1]}"],
-                "results": "TOLL_COSTS",
-                "options[routingMode]": routing_mode,
-                "options[trafficMode]": "AVERAGE"
-            }
-            if avoid_switzerland:
-                params["options[prohibitedCountries]"] = "CH"
-
-            logger.info(f"Wysyłam zapytanie do PTV API: {params}")
-            response = requests.get(base_url, params=params, headers=headers, timeout=40)
-            logger.info(f"Otrzymano odpowiedź z kodem: {response.status_code}")
             
-            if response.status_code == 200:
-                data = response.json()
-                logger.info(f"Odpowiedź z API: {data}")
-                distance = data.get('distance')
-                if distance is not None:
-                    distance_km = distance / 1000
-                    logger.info(f"Obliczony dystans: {distance_km} km")
-                    self.cache_manager.set(coord_from, coord_to, distance_km, 
-                                        avoid_switzerland, routing_mode)
-                    return distance_km
+            params = [
+                ("waypoints", f"{coord_from[0]},{coord_from[1]}"),
+                ("waypoints", f"{coord_to[0]},{coord_to[1]}"),
+                ("results", "LEGS,POLYLINE,TOLL_COSTS"),
+                ("options[routingMode]", routing_mode),
+                ("options[trafficMode]", "AVERAGE")
+            ]
+            
+            if avoid_switzerland:
+                params.append(("options[prohibitedCountries]", "CH"))
+
+            try:
+                response = requests.get(base_url, params=params, headers=headers, timeout=40)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Pobierz dystans z sekcji legs
+                    distance = None
+                    if 'legs' in data and isinstance(data['legs'], list):
+                        distance = sum(leg.get('distance', 0) for leg in data['legs'])
+                    
+                    polyline = data.get('polyline', '')
+                    
+                    # Pobierz opłaty drogowe
+                    toll = data.get("toll", {}).get("costs", {})
+                    total_toll = toll.get("convertedPrice", {}).get("price")
+                    
+                    # Wyświetl szczegółowe informacje o opłatach drogowych
+                    print(f"\n[TOLL] Wywołanie kosztów drogowych dla: {coord_from} -> {coord_to}")
+                    print(f"[TOLL] SUMA EUR: {total_toll}")
+
+                    # Rozbicie na kraje: długość i koszt
+                    countries = toll.get("countries", [])
+                    if countries:
+                        print("[TOLL] Rozbicie na kraje (długość trasy oraz koszt w EUR):")
+                        for kraj in countries:
+                            code = kraj.get("countryCode")
+                            converted = kraj.get("convertedPrice", {}).get("price")
+                            distance_m = kraj.get("distance") or kraj.get("length") or kraj.get("segmentLength")
+                            distance_km = round(distance_m / 1000, 1) if distance_m is not None else "?"
+                            print(f"    {code}: {distance_km} km / {converted} EUR")
+                    
+                    if distance is not None:
+                        result = {
+                            'distance': distance / 1000, 
+                            'polyline': polyline,
+                            'toll_cost': total_toll
+                        }
+                        # Dodaj szczegółowe informacje o opłatach drogowych
+                        toll_details = {}
+                        for kraj in toll.get("countries", []):
+                            code = kraj.get("countryCode")
+                            converted = kraj.get("convertedPrice", {}).get("price")
+                            if code and converted:
+                                toll_details[code] = converted
+                        result['toll_details'] = toll_details
+                        
+                        # Zapisz w cache
+                        self.cache_manager.set(coord_from, coord_to, result, avoid_switzerland, routing_mode)
+                        return result
+                    else:
+                        logger.warning(f"Brak danych o dystansie w odpowiedzi API dla trasy {coord_from} -> {coord_to}")
+                        return None
                 else:
-                    logger.error(f"Brak dystansu w odpowiedzi API: {data}")
-            else:
-                logger.error(f"Błąd API PTV: {response.status_code} - {response.text}")
-            return None
+                    logger.warning(f"Błąd API PTV: {response.status_code} dla trasy {coord_from} -> {coord_to}")
+                    return None
+            except Exception as e:
+                logger.warning(f"Wyjątek podczas pobierania trasy {coord_from} -> {coord_to}: {str(e)}")
+                return None
 
         # Dodaj request do kolejki
         self.request_queue.add_request(request_id, _make_request)
@@ -207,11 +250,10 @@ class PTVRouteManager:
                 if result['status'] == 'success':
                     return result['data']
                 else:
-                    logger.error(f"Błąd w zapytaniu: {result['error']}")
                     return None
             time.sleep(0.1)
         
-        logger.error("Timeout podczas oczekiwania na wynik")
+        logger.warning("Timeout")
         return None
 
     def get_stats(self):

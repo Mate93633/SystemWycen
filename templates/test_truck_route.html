@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}Test trasy ciężarowej{% endblock %}
+
+{% block content %}
+    <h1>Test trasy ciężarowej</h1>
+    
+    <form class="form">
+        <div class="form-group">
+            <label for="from">Punkt początkowy (szerokość,długość):</label>
+            <input type="text" id="from" name="from" value="50.433792,7.466426" placeholder="np. 50.433792,7.466426">
+        </div>
+        
+        <div class="form-group">
+            <label for="to">Punkt końcowy (szerokość,długość):</label>
+            <input type="text" id="to" name="to" value="48.237324,13.824039" placeholder="np. 48.237324,13.824039">
+        </div>
+        
+        <div class="form-group">
+            <label for="routingMode">Tryb wyznaczania trasy:</label>
+            <select id="routingMode" name="routingMode">
+                <option value="MONETARY" selected>Ekonomiczna (MONETARY)</option>
+                <option value="SHORTEST">Najkrótsza (SHORTEST)</option>
+                <option value="FAST">Najszybsza (FAST)</option>
+                <option value="SHORT">Krótka (SHORT)</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="avoid_switzerland"> Omijaj Szwajcarię
+            </label>
+        </div>
+        
+        <div class="form-group">
+            <button type="button" onclick="testRoute()" class="button">Testuj trasę</button>
+        </div>
+    </form>
+    
+    <div id="result" class="alert" style="display: none;"></div>
+    
+    <script>
+    function testRoute() {
+        const from = document.getElementById('from').value;
+        const to = document.getElementById('to').value;
+        const mode = document.getElementById('routingMode').value;
+        const avoid = document.getElementById('avoid_switzerland').checked;
+        
+        const resultDiv = document.getElementById('result');
+        resultDiv.style.display = 'block';
+        resultDiv.className = 'alert';
+        resultDiv.innerHTML = '<p>⏳ Obliczanie trasy...</p>';
+        
+        fetch(`/test_truck_route?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&mode=${encodeURIComponent(mode)}&avoid=${avoid}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    resultDiv.className = 'alert alert-success';
+                    let resultHtml = `
+                        <h3>Wyniki:</h3>
+                        <div class="form-group">
+                            <strong>Dystans:</strong> ${data.dystans_km.toFixed(2)} km
+                        </div>
+                        <div class="form-group">
+                            <strong>Czas przejazdu:</strong> ${data.czas_min.toFixed(2)} min (${(data.czas_min/60).toFixed(2)} godz.)
+                        </div>
+                    `;
+                    if (data.kraje && data.kraje.length > 0) {
+                        resultHtml += `
+                            <div class="form-group">
+                                <strong>Kraje na trasie:</strong> ${data.kraje.join(', ')}
+                            </div>
+                        `;
+                    }
+                    resultDiv.innerHTML = resultHtml;
+                } else {
+                    resultDiv.className = 'alert alert-error';
+                    resultDiv.innerHTML = `<p><strong>❌ Błąd:</strong> ${data.message}</p>`;
+                }
+            })
+            .catch(error => {
+                resultDiv.className = 'alert alert-error';
+                resultDiv.innerHTML = `<p><strong>❌ Błąd:</strong> ${error}</p>`;
+            });
+    }
+    </script>
+{% endblock %} 

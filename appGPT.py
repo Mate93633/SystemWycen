@@ -1,5 +1,14 @@
 import pandas as pd
-from flask import Flask, request, send_file, jsonify, render_template_string
+from flask import (
+    Flask, 
+    request, 
+    send_file, 
+    jsonify, 
+    render_template_string, 
+    render_template,
+    redirect,
+    url_for
+)
 import io
 import time
 import requests
@@ -12,6 +21,7 @@ import logging
 import os
 import joblib
 import polyline
+from polyline import decode as decode_polyline
 import json
 from functools import wraps
 import re
@@ -30,9 +40,30 @@ REGION_MAPPING = {}
 PTV_API_KEY = "RVVfZmQ1YTcyY2E4ZjNiNDhmOTlhYjE5NjRmNGZhYTdlNTc6NGUyM2VhMmEtZTc2YS00YmVkLWIyMTMtZDc2YjE0NWZjZjE1"
 DEFAULT_ROUTING_MODE = "FAST"  # Stały tryb wyznaczania trasy
 
-# Konfiguracja loggera
-logging.basicConfig(level=logging.INFO)
+# Konfiguracja loggera - zmiana poziomu na WARNING aby ograniczyć logi
+logging.basicConfig(
+    level=logging.WARNING,
+    format='%(message)s',  # Uproszczony format bez timestampów
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
+
+# Filtr dla logów postępu
+class FilterProgress(logging.Filter):
+    def filter(self, record):
+        return not record.getMessage().startswith('Progress:')
+
+logger.addFilter(FilterProgress())
+
+# Ustawienie poziomu INFO dla logów związanych z punktami trasy
+route_logger = logging.getLogger(__name__ + '.route')
+route_logger.setLevel(logging.INFO)
+route_logger.handlers = []  # Usuwamy domyślne handlery
+route_logger.addHandler(logging.StreamHandler())
+route_logger.propagate = False  # Zapobiegamy propagacji logów do rodzica
 
 # Inicjalizacja geolokatora
 geolocator = Nominatim(user_agent="wycena_transportu", timeout=15)
@@ -43,7 +74,6 @@ route_cache = Cache("route_cache")
 
 # Inicjalizacja menedżera PTV
 ptv_manager = PTVRouteManager(PTV_API_KEY)
-logger.info("PTV Manager zainicjalizowany")
 
 # Zmienne globalne do śledzenia postępu
 PROGRESS = 0
@@ -57,6 +87,25 @@ VERIFICATION_IN_PROGRESS = False
 FILE_TO_PROCESS = None
 PROCESSING_PARAMS = {}
 GEOCODING_CURRENT = 0
+
+# Dane do podglądu w tabeli
+PREVIEW_DATA = {
+    'headers': [
+        'Kraj załadunku',
+        'Kod pocztowy załadunku',
+        'Kraj rozładunku',
+        'Kod pocztowy rozładunku',
+        'Dystans (km)',
+        'Koszt paliwa',
+        'Koszt kierowcy',
+        'Opłaty drogowe (szczegóły)',
+        'Suma opłat drogowych',
+        'Opłaty/km',
+        'Suma kosztów',
+        'Link do mapy'
+    ],
+    'rows': []
+}
 
 # Mapowanie krajów – ujednolicone nazwy
 COUNTRY_MAPPING = {
@@ -1474,9 +1523,7 @@ def get_toll_cost(
 
 
 def get_route_distance(coord_from, coord_to, avoid_switzerland=False, routing_mode=DEFAULT_ROUTING_MODE):
-    logger.info(f"Wywołanie get_route_distance dla trasy: {coord_from} -> {coord_to}")
     result = ptv_manager.get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
-    logger.info(f"Otrzymany wynik: {result} km")
     return result
 
 
@@ -2129,23 +2176,116 @@ def modify_process_przetargi(process_func):
     return wrapper
 
 
+def sample_route_points(points, num_points=10):
+    """
+    Wybiera reprezentatywne punkty z trasy
+    """
+    if not points or len(points) <= num_points:
+        return points
+    
+    # Wybierz punkty w równych odstępach
+    step = len(points) // (num_points - 1)  # -1 bo chcemy zachować punkt końcowy
+    sampled_points = points[::step]
+    
+    # Dodaj ostatni punkt jeśli nie został uwzględniony
+    if points[-1] not in sampled_points:
+        sampled_points = sampled_points[:num_points-1] + [points[-1]]
+    
+    return sampled_points[:num_points]
+
+def decode_polyline(polyline_str):
+    """
+    Dekoduje polyline z API PTV do listy punktów [lat, lng]
+    """
+    try:
+        if not polyline_str or not isinstance(polyline_str, str):
+            return []
+            
+        # Sprawdź czy mamy do czynienia z formatem GeoJSON
+        if 'coordinates' in polyline_str:
+            try:
+                # Znajdź początek i koniec koordynatów
+                start = polyline_str.find('[[') + 2
+                end = polyline_str.rfind(']]')
+                if start == -1 or end == -1:
+                    return []
+                    
+                # Wyciągnij tylko koordynaty
+                coords_str = polyline_str[start:end]
+                points = []
+                
+                # Podziel na pary współrzędnych
+                coords = coords_str.split('],[')
+                for coord in coords:
+                    coord = coord.strip('[]')
+                    if ',' in coord:
+                        try:
+                            lng, lat = map(float, coord.split(','))
+                            points.append([lat, lng])
+                        except (ValueError, TypeError):
+                            continue
+                
+                return points
+            except Exception:
+                return []
+        else:
+            # Spróbuj standardowego dekodowania polyline
+            try:
+                return polyline.decode(polyline_str)
+            except Exception:
+                return []
+            
+    except Exception:
+        return []
+
+def create_google_maps_link(coord_from, coord_to, polyline_str):
+    """
+    Tworzy link do Google Maps z trasą używając punktów pośrednich
+    """
+    if not polyline_str:
+        route_logger.info("Brak polyline - tworzę prosty link punkt-punkt")
+        return f"https://www.google.com/maps/dir/{coord_from[0]},{coord_from[1]}/{coord_to[0]},{coord_to[1]}"
+    
+    try:
+        # Dekoduj polyline do listy punktów
+        route_points = decode_polyline(polyline_str)
+        
+        # Wybierz 10 reprezentatywnych punktów
+        sampled_points = sample_route_points(route_points, 10)
+        
+        if not sampled_points:
+            route_logger.info("Nie udało się wybrać punktów pośrednich - tworzę prosty link punkt-punkt")
+            return f"https://www.google.com/maps/dir/{coord_from[0]},{coord_from[1]}/{coord_to[0]},{coord_to[1]}"
+        
+        # Wyświetl punkty pośrednie
+        print("\nPunkty pośrednie na trasie:")
+        for i, point in enumerate(sampled_points):
+            print(f"Punkt {i+1}: {point[0]}, {point[1]}")
+        
+        # Twórz link z punktami pośrednimi
+        waypoints = "/".join(f"{lat},{lng}" for lat, lng in sampled_points[1:-1])
+        link = f"https://www.google.com/maps/dir/{coord_from[0]},{coord_from[1]}/{waypoints}/{coord_to[0]},{coord_to[1]}"
+        print(f"Wygenerowany link z {len(sampled_points)-2} punktami pośrednimi")
+        return link
+        
+    except Exception as e:
+        route_logger.warning(f"Błąd podczas generowania linku: {str(e)} - tworzę prosty link punkt-punkt")
+        return f"https://www.google.com/maps/dir/{coord_from[0]},{coord_from[1]}/{coord_to[0]},{coord_to[1]}"
+
 @modify_process_przetargi
 def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
-    global PROGRESS, TOTAL_ROWS
+    global PROGRESS, TOTAL_ROWS, PREVIEW_DATA
     TOTAL_ROWS = len(df)
     PROGRESS = 0
     results = []
-
-    logger.info("Rozpoczynam przetwarzanie przetargów")
-    logger.info(f"PTV Manager status: {ptv_manager is not None}")
-    logger.info(f"PTV Manager cache stats: {ptv_manager.get_stats()}")
+    
+    # Resetuj dane podglądu
+    PREVIEW_DATA['rows'] = []
+    PREVIEW_DATA['total_count'] = TOTAL_ROWS
 
     # Bezpośrednie przypisanie nowych nazw kolumn
     df.columns = ['Kraj zaladunku', 'Kod zaladunku', 'Miasto zaladunku',
                  'Kraj rozladunku', 'Kod rozładunku', 'Miasto rozładunku']
-
-    logger.info(f"Kolumny po zmianie nazw: {list(df.columns)}")
-    logger.info(f"Przykładowy wiersz:\n{df.iloc[0]}")
 
     for i, row in df.iterrows():
         try:
@@ -2164,23 +2304,33 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
             coords_zl = get_coordinates(lc, lp, lc_city)
             coords_roz = get_coordinates(uc, up, uc_city)
 
-            # Oblicz opłaty drogowe
-            toll_cost = get_toll_cost(
-                coords_zl[:2],
-                coords_roz[:2],
-                start_time="2025-05-15T10:00:00.000Z",
-                routing_mode=DEFAULT_ROUTING_MODE,
-                avoid_switzerland=True
-            )
-
             if coords_zl and coords_roz and None not in coords_zl[:2] and None not in coords_roz[:2]:
-                logger.info(f"Obliczam dystans dla trasy: {coords_zl[:2]} -> {coords_roz[:2]}")
-                dist_ptv = get_route_distance(coords_zl[:2], coords_roz[:2], avoid_switzerland=True,
+                print(f"\nPobieranie trasy dla: {lc_city} ({lp}) -> {uc_city} ({up})")
+                route_result = get_route_distance(coords_zl[:2], coords_roz[:2], avoid_switzerland=True,
                                           routing_mode=DEFAULT_ROUTING_MODE)
-                logger.info(f"Otrzymany dystans: {dist_ptv} km")
+                if isinstance(route_result, dict):
+                    dist_ptv = route_result.get('distance')
+                    polyline = route_result.get('polyline', '')
+                    toll_cost = route_result.get('toll_cost')  # Pobierz opłaty drogowe z wyniku trasy
+                else:
+                    dist_ptv = route_result
+                    polyline = ''
+                    toll_cost = None
             else:
-                logger.warning(f"Brak współrzędnych dla trasy: {lc_city} ({lp}) -> {uc_city} ({up})")
+                print(f"\nBrak współrzędnych dla: {lc_city} ({lp}) -> {uc_city} ({up})")
                 dist_ptv = None
+                polyline = ''
+                toll_cost = None
+
+            # Tworzenie linku do mapy
+            if coords_zl and coords_roz and None not in coords_zl[:2] and None not in coords_roz[:2] and polyline:
+                map_link = create_google_maps_link(coords_zl[:2], coords_roz[:2], polyline)
+            else:
+                if coords_zl and coords_roz and None not in coords_zl[:2] and None not in coords_roz[:2]:
+                    # Jeśli mamy współrzędne, ale nie mamy polyline, stwórz prosty link
+                    map_link = f"https://www.google.com/maps/dir/{coords_zl[0]},{coords_zl[1]}/{coords_roz[0]},{coords_roz[1]}"
+                else:
+                    map_link = None
 
             fuel_cost_value = dist_ptv * fuel_cost if dist_ptv is not None else None
 
@@ -2285,6 +2435,38 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
             if uc_city and not verify_unload.get('is_match') and verify_unload.get('suggested_coords'):
                 suggested_coords_info += "Użyto sugerowanych współrzędnych dla rozładunku."
 
+            # Przygotuj informacje o opłatach drogowych dla poszczególnych krajów
+            toll_info = []
+            total_toll = 0
+            if isinstance(route_result, dict) and 'toll_details' in route_result:
+                for country, amount in route_result['toll_details'].items():
+                    if amount > 0:
+                        toll_info.append(f"{country}: {format_currency(amount)}€")
+                        total_toll += amount
+            toll_text = "\n".join(toll_info) if toll_info else "-"
+            
+            # Oblicz koszt opłat na kilometr
+            toll_per_km = total_toll / dist_ptv if dist_ptv and dist_ptv > 0 and total_toll > 0 else 0
+
+            # Dodaj dane do podglądu (maksymalnie 10 ostatnich wierszy)
+            preview_row = {
+                'Kraj załadunku': lc,
+                'Kod pocztowy załadunku': lp,
+                'Kraj rozładunku': uc,
+                'Kod pocztowy rozładunku': up,
+                'Dystans (km)': dist_ptv,
+                'Koszt paliwa': fuel_cost_value,
+                'Koszt kierowcy': driver_cost_value,
+                'Opłaty drogowe (szczegóły)': toll_text,
+                'Suma opłat drogowych': total_toll,
+                'Opłaty/km': toll_per_km,
+                'Suma kosztów': suma_kosztow,
+                'Link do mapy': map_link if map_link else "-"
+            }
+            PREVIEW_DATA['rows'].append(preview_row)
+            if len(PREVIEW_DATA['rows']) > 10:
+                PREVIEW_DATA['rows'].pop(0)
+
             # Przygotuj wyniki z dodanymi kolumnami regionalnymi
             result_dict = {
                 "Kraj zaladunku": lc,
@@ -2303,6 +2485,7 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
                 "km całkowite z podlotem": format_currency(total_distance),  # Nowa kolumna
                 "podlot": format_currency(podlot),  # Zmieniona nazwa kolumny
                 "km w linii prostej": format_currency(dist_haversine),
+                "Link do mapy": map_link,
                 "Dopasowanie (giełda)": rates.get('dopasowanie_gielda'),
                 "Giełda_stawka_3m": format_currency(safe_float(rates.get('gielda_stawka_3m'))),
                 "Giełda_stawka_6m": format_currency(safe_float(rates.get('gielda_stawka_6m'))),
@@ -2320,6 +2503,7 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
                 "Relacja": rates.get('relacja'),
                 "Tryb wyznaczania trasy": DEFAULT_ROUTING_MODE,
                 "opłaty drogowe (EUR)": format_currency(toll_cost),
+                "Opłaty drogowe/km (EUR)": format_currency(toll_per_km),
                 "Koszt paliwa (EUR)": format_currency(fuel_cost_value),
                 "Koszt kierowcy (EUR)": format_currency(driver_cost_value),
                 "Opłaty drogowe podlot (EUR)": format_currency(oplaty_drogowe_podlot),
@@ -2365,6 +2549,7 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
         "km PTV (tylko ładowne)",
         "km całkowite z podlotem",  # Nowa kolumna
         "podlot",  # Zmieniona nazwa
+        "Link do mapy",
         # "km w linii prostej",
         # "Dopasowanie (giełda)",
         "Giełda_stawka_3m", "Giełda_stawka_6m", "Giełda_stawka_12m",
@@ -2378,7 +2563,7 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
         "Klient - fracht proponowany km całkowite",  # Zmieniona nazwa
         "Relacja",
         ##"Tryb wyznaczania trasy",
-        "opłaty drogowe (EUR)", "Koszt paliwa (EUR)", "Koszt kierowcy (EUR)",
+        "opłaty drogowe (EUR)", "Opłaty drogowe/km (EUR)", "Koszt paliwa (EUR)", "Koszt kierowcy (EUR)",
         "Opłaty drogowe podlot (EUR)", "Suma kosztów (EUR)",
         "Odległość miasto-kod pocztowy załadunku (km)",
         "Zgodność lokalizacji załadunku",
@@ -2397,7 +2582,7 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
         "Region - Giełda stawka 12m",
         "Region - Klient stawka 3m",
         "Region - Klient stawka 6m",
-        "Region - Klient stawka 12m",
+        "Region - Klient stawka 12m"
     ]
 
     df_out = pd.DataFrame(results)
@@ -2462,6 +2647,14 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
             'border_color': '#000000'
         })
 
+        format_koszty_km = workbook.add_format({
+            'num_format': '#,##0.00',
+            'bg_color': '#FFC1C1',
+            'align': 'right',
+            'border': 1,
+            'border_color': '#000000'
+        })
+
         format_koszty_suma = workbook.add_format({
             'num_format': '#,##0',
             'bg_color': '#FF3B3B',
@@ -2499,7 +2692,8 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
             "Zgodność lokalizacji załadunku", "Zgodność lokalizacji rozładunku", "Uwagi dotyczące współrzędnych",
             "Koordynaty miasta załadunku", "Koordynaty kodu pocztowego załadunku",
             "Koordynaty miasta rozładunku", "Koordynaty kodu pocztowego rozładunku",
-            "Region załadunku", "Region rozładunku", "Region - dopasowanie"
+            "Region załadunku", "Region rozładunku", "Region - dopasowanie",
+            "Link do mapy"  # Dodano kolumnę z linkiem
         ]
 
         # Kolumny stawek giełdy
@@ -2528,7 +2722,8 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
 
         # Kolumny kosztów
         koszty_columns = [
-            "opłaty drogowe (EUR)", "Koszt paliwa (EUR)", "Koszt kierowcy (EUR)", "Opłaty drogowe podlot (EUR)"
+            "opłaty drogowe (EUR)", "Opłaty drogowe/km (EUR)", "Koszt paliwa (EUR)", 
+            "Koszt kierowcy (EUR)", "Opłaty drogowe podlot (EUR)"
         ]
 
         # Kolumny dystansów
@@ -2595,9 +2790,15 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
                 elif column in koszty_columns:
                     try:
                         val = float(cell_value) if cell_value is not None else None
-                        worksheet.write(row, col_num, val, format_koszty)
+                        if column == "Opłaty drogowe/km (EUR)":
+                            worksheet.write(row, col_num, val, format_koszty_km)
+                        else:
+                            worksheet.write(row, col_num, val, format_koszty)
                     except (ValueError, TypeError):
-                        worksheet.write_blank(row, col_num, None, format_koszty)
+                        if column == "Opłaty drogowe/km (EUR)":
+                            worksheet.write_blank(row, col_num, None, format_koszty_km)
+                        else:
+                            worksheet.write_blank(row, col_num, None, format_koszty)
                 elif column == "Suma kosztów (EUR)":
                     try:
                         val = float(cell_value) if cell_value is not None else None
@@ -2692,61 +2893,9 @@ def upload_file():
             file_bytes = io.BytesIO(file.read())
             file_bytes.seek(0)
             threading.Thread(target=background_processing, args=(file_bytes, fuel_cost, driver_cost)).start()
-            return '''<html><body>
-                      <h2>Plik przesłany i przetwarzany.</h2>
-                      <p id="postep">Trwa przetwarzanie...</p>
-                      <div id="download-link" style="display:none;">
-                        <a href="/download">📥 Pobierz wynikowy plik Excel</a>
-                      </div>
-                      <div id="geocode-link" style="display:none;">
-                        <a href="/ungeocoded_locations">🌍 Uzupełnij brakujące lokalizacje</a>
-                      </div>
-                      <div>
-                        <p><a href="/test_route_form">🧪 Testuj trasę</a></p>
-                      </div>
-                      <script>
-                      function checkProgress() {
-  fetch('/progress')
-    .then(response => response.json())
-    .then(data => {
-      let message = `⏳ Przeliczanie: ${data.current} z ${data.total} (${data.progress}%)`;
-      if (data.geocoding_progress !== undefined) {
-        message += ` | Geokodowanie: ${data.geocoding_progress}%`;
-      }
-      document.getElementById("postep").innerText = message;
-      if (data.progress >= 100) {
-        document.getElementById("postep").innerText = "✅ Gotowe! Możesz pobrać wynik.";
-        document.getElementById("download-link").style.display = "block";
-        clearInterval(timer);
-      }
-      if (data.progress === -2) {
-        document.getElementById("postep").innerText = "⚠️ Wymagane ręczne uzupełnienie lokalizacji!";
-        document.getElementById("geocode-link").style.display = "block";
-        clearInterval(timer);
-      }
-    });
-}
-                      let timer = setInterval(checkProgress, 1000);
-                      </script>
-                      </body></html>'''
-        return '''<html><body>
-                  <h1>Nie wybrano pliku</h1>
-                  <p>Wróć i wybierz plik Excel do przetworzenia.</p>
-                  <a href="/">Powrót</a>
-                  </body></html>'''
-    return '''<html><body>
-              <h1>Wgraj plik Excel z przetargami</h1>
-              <form method="post" enctype="multipart/form-data">
-                  <input type="file" name="file"><br>
-                  <label for="fuel_cost">Koszt paliwa (€/km):</label>
-                  <input type="number" step="0.01" name="fuel_cost" value="0.40"><br>
-                  <label for="driver_cost">Koszt kierowcy (€/dzień):</label>
-                  <input type="number" step="0.01" name="driver_cost" value="130"><br>
-                  <input type="submit" value="Prześlij">
-              </form>
-              <p><a href="/test_route_form">🧪 Testuj trasę</a></p>
-              <p><a href="/save_cache">💾 Zapisz pamięć podręczną</a></p>
-              </body></html>'''
+            return render_template("processing.html")
+        return render_template("error.html", message="Nie wybrano pliku")
+    return render_template("upload.html")
 
 
 @app.route("/download")
@@ -2766,7 +2915,8 @@ def progress():
         current=CURRENT_ROW,
         total=TOTAL_ROWS,
         geocoding_progress=geocoding_progress,
-        error=PROGRESS == -1 or PROGRESS == -2
+        error=PROGRESS == -1 or PROGRESS == -2,
+        preview_data=PREVIEW_DATA
     )
 
 
@@ -2784,178 +2934,19 @@ def ptv_stats():
 @app.route("/ungeocoded_locations", methods=["GET", "POST"])
 def ungeocoded_locations():
     if request.method == "POST":
-        file = request.files.get('file')
-        if file:
-            file_bytes = io.BytesIO(file.read())
-            file_bytes.seek(0)
-            try:
-                df = pd.read_excel(file_bytes, dtype=str)
-                # Upewnij się, że nazwy kolumn są spójne
-                column_mapping = {}
-                for col in df.columns:
-                    normalized_col = col.lower().strip()
-                    if " " in normalized_col:
-                        normalized_col = normalized_col.replace(" ", "_")
-                    column_mapping[col] = normalized_col
+        try:
+            file = request.files.get("file")
+            if not file:
+                return render_template("error.html", message="Nie wybrano pliku")
 
-                df = df.rename(columns=column_mapping)
-                print("Kolumny po normalizacji:", list(df.columns))
+            df = pd.read_excel(file)
+            ungeocoded = get_ungeocoded_locations(df)
+            return render_template("ungeocoded_locations.html", ungeocoded=ungeocoded)
 
-                # Sprawdź czy wymagane kolumny istnieją
-                required_columns = [
-                    'kraj_zaladunku', 'kod_pocztowy_zaladunku',
-                    'kraj_rozladunku', 'kod_pocztowy_rozladunku'
-                ]
-
-                # Przekształć nazwy kolumn za pomocą mapowania, jeśli potrzeba
-                for i, col in enumerate(required_columns):
-                    if col not in df.columns:
-                        alt_col = col.replace("_", " ")
-                        if alt_col in df.columns:
-                            required_columns[i] = alt_col
-
-                missing_columns = [col for col in required_columns if col not in df.columns]
-                if missing_columns:
-                    return f"Brak wymaganych kolumn: {', '.join(missing_columns)}", 400
-
-                # Synchronizuj cache przed sprawdzaniem
-                sync_geo_cache_with_lookup()
-
-                # Pobierz nierozpoznane lokalizacje
-                ungeocoded = get_ungeocoded_locations(df)
-
-                # Jeśli wszystko zostało zgeokodowane
-                if not ungeocoded:
-                    return '''
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <title>Geokodowanie zakończone</title>
-                        <style>
-                            body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-                        </style>
-                    </head>
-                    <body>
-                        <h1>✅ Wszystkie lokalizacje zostały poprawnie zgeokodowane!</h1>
-                        <p>Możesz teraz kontynuować przetwarzanie pliku.</p>
-                        <p><a href="/">« Powrót do strony głównej</a></p>
-                    </body>
-                    </html>
-                    '''
-
-                return render_template_string('''
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <title>Nierozpoznane lokalizacje</title>
-                        <style>
-                            body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
-                            table { width: 100%; border-collapse: collapse; }
-                            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-                            th { background-color: #f2f2f2; }
-                            .success { color: green; font-weight: bold; }
-                            .error { color: red; font-weight: bold; }
-                        </style>
-                    </head>
-                    <body>
-                        <h1>Nierozpoznane lokalizacje</h1>
-                        <p>Znaleziono <span class="error">{{ ungeocoded|length }}</span> lokalizacji, które wymagają ręcznego geokodowania.</p>
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Kraj</th>
-                                    <th>Kod pocztowy</th>
-                                    <th>Miasto</th>
-                                    <th>Klucz</th>
-                                    <th>Warianty zapytań</th>
-                                    <th>Akcje</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for loc in ungeocoded %}
-                                <tr>
-                                    <td>{{ loc.country }}</td>
-                                    <td>{{ loc.postal_code }}</td>
-                                    <td>{{ loc.city }}</td>
-                                    <td>{{ loc.key }}</td>
-                                    <td>
-                                        {% for variant in loc.query_variants %}
-                                            <div>{{ variant[0] }}<br/><small>(klucz: {{ variant[1] }})</small></div>
-                                        {% endfor %}
-                                    </td>
-                                    <td>
-                                        <a href="#" onclick="showManualInput('{{ loc.key }}', '{{ loc.country }}', '{{ loc.postal_code }}', '{{ loc.city }}')">
-                                            Dodaj współrzędne
-                                        </a>
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                        <div id="manualInputModal" style="display:none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
-                            <div style="background: white; margin: 100px auto; padding: 20px; width: 400px; border-radius: 5px;">
-                                <h2>Dodaj współrzędne ręcznie</h2>
-                                <form id="manualCoordForm" onsubmit="submitCoordinates(event)">
-                                    <input type="hidden" id="locationKey" name="key">
-                                    <label>Kraj: <input type="text" id="countryInput" readonly></label><br>
-                                    <label>Kod pocztowy: <input type="text" id="postalCodeInput" readonly></label><br>
-                                    <label>Miasto: <input type="text" id="cityInput" readonly></label><br>
-                                    <label>Szerokość geograficzna: <input type="text" id="latInput" required></label><br>
-                                    <label>Długość geograficzna: <input type="text" id="lonInput" required></label><br>
-                                    <button type="submit">Zapisz współrzędne</button>
-                                    <button type="button" onclick="closeModal()">Anuluj</button>
-                                </form>
-                            </div>
-                        </div>
-                        <div style="margin-top: 20px;">
-                            <p><a href="/">« Powrót do strony głównej</a></p>
-                        </div>
-                        <script>
-                        function showManualInput(key, country, postalCode, city) {
-                            document.getElementById('locationKey').value = key;
-                            document.getElementById('countryInput').value = country;
-                            document.getElementById('postalCodeInput').value = postalCode;
-                            document.getElementById('cityInput').value = city;
-                            document.getElementById('manualInputModal').style.display = 'block';
-                        }
-                        function closeModal() {
-                            document.getElementById('manualInputModal').style.display = 'none';
-                        }
-                        function submitCoordinates(event) {
-                            event.preventDefault();
-                            const key = document.getElementById('locationKey').value;
-                            const lat = parseFloat(document.getElementById('latInput').value);
-                            const lon = parseFloat(document.getElementById('lonInput').value);
-                            fetch('/save_manual_coordinates', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ key: key, latitude: lat, longitude: lon })
-                            })
-                            .then(response => response.json())
-                            .then(data => {
-                                if (data.success) {
-                                    alert('Współrzędne zostały zapisane!');
-                                    location.reload();
-                                } else {
-                                    alert('Błąd: ' + data.message);
-                                }
-                            });
-                        }
-                        </script>
-                    </body>
-                    </html>
-                ''', ungeocoded=ungeocoded)
-            except Exception as e:
-                return f"Błąd przetwarzania pliku: {str(e)}", 500
-        return "Brak pliku", 400
+        except Exception as e:
+            return render_template("error.html", message=str(e))
     else:
-        return '''<html><body>
-                  <h1>Wgraj plik Excel, aby sprawdzić nierozpoznane lokalizacje</h1>
-                  <form method="post" enctype="multipart/form-data">
-                  <input type="file" name="file">
-                  <input type="submit" value="Prześlij">
-                  </form>
-                  </body></html>'''
+        return render_template("upload_for_geocoding.html")
 
 
 @app.route("/save_manual_coordinates", methods=['POST'])
@@ -2973,131 +2964,149 @@ def save_manual_coordinates():
         return jsonify({'success': False, 'message': str(e)})
 
 
-@app.route("/test_route_form")
+@app.route("/test_route_form", methods=['GET', 'POST'])
 def test_route_form():
-    return '''<html>
-            <head>
-                <title>Test trasy</title>
-                <style>
-                    body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-                    .form-group { margin-bottom: 15px; }
-                    label { display: block; margin-bottom: 5px; font-weight: bold; }
-                    input[type="text"] { width: 300px; padding: 8px; }
-                    button { padding: 10px 15px; background-color: #4CAF50; color: white; border: none; cursor: pointer; }
-                    #result { margin-top: 20px; border: 1px solid #ddd; padding: 15px; display: none; }
-                    .back-link { margin-top: 20px; }
-                    select { width: 315px; padding: 8px; }
-                </style>
-            </head>
-            <body>
-                <h1>Test trasy</h1>
-                <div class="form-group">
-                    <label for="from">Punkt początkowy (szerokość,długość):</label>
-                    <input type="text" id="from" name="from" value="50.433792,7.466426" placeholder="np. 50.433792,7.466426">
-                </div>
-                <div class="form-group">
-                    <label for="to">Punkt końcowy (szerokość,długość):</label>
-                    <input type="text" id="to" name="to" value="48.237324,13.824039" placeholder="np. 48.237324,13.824039">
-                </div>
-                <div class="form-group">
-                    <label for="routingMode">Tryb wyznaczania trasy:</label>
-                    <select id="routingMode" name="routingMode">
-                        <option value="MONETARY" selected>Ekonomiczna (MONETARY)</option>
-                        <option value="SHORTEST">Najkrótsza (SHORTEST)</option>
-                        <option value="FAST">Najszybsza (FAST)</option>
-                        <option value="SHORT">Krótka (SHORT)</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="avoid_switzerland"> Omijaj Szwajcarię
-                    </label>
-                </div>
-                <button onclick="testRoute()">Testuj trasę</button>
-                <div id="result"></div>
-                <div class="back-link">
-                    <a href="/">« Powrót do strony głównej</a>
-                </div>
-                <script>
-                function testRoute() {
-                    const from = document.getElementById('from').value;
-                    const to = document.getElementById('to').value;
-                    const mode = document.getElementById('routingMode').value;
-                    const avoid = document.getElementById('avoid_switzerland').checked;
-                    document.getElementById('result').style.display = 'block';
-                    document.getElementById('result').innerHTML = '<p>Obliczanie trasy...</p>';
-                    fetch(`/test_truck_route?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&mode=${encodeURIComponent(mode)}&avoid=${avoid}`)
-                        .then(response => response.json())
-                        .then(data => {
-                            let resultHtml = '';
-                            if (data.status === 'success') {
-                                resultHtml = `
-                                    <h3>Wyniki:</h3>
-                                    <p><strong>Dystans:</strong> ${data.dystans_km.toFixed(2)} km</p>
-                                    <p><strong>Czas przejazdu:</strong> ${data.czas_min.toFixed(2)} min (${(data.czas_min/60).toFixed(2)} godz.)</p>
-                                `;
-                                if (data.kraje && data.kraje.length > 0) {
-                                    resultHtml += `<p><strong>Kraje na trasie:</strong> ${data.kraje.join(', ')}</p>`;
-                                }
-                            } else {
-                                resultHtml = `<p><strong>Błąd:</strong> ${data.message}</p>`;
-                            }
-                            document.getElementById('result').innerHTML = resultHtml;
-                        })
-                        .catch(error => {
-                            document.getElementById('result').innerHTML = `<p><strong>Błąd:</strong> ${error}</p>`;
-                        });
-                }
-                </script>
-            </body>
-            </html>'''
+    if request.method == 'POST':
+        load_country = request.form.get('load_country', '').strip().upper()
+        load_postal = request.form.get('load_postal', '').strip()
+        unload_country = request.form.get('unload_country', '').strip().upper()
+        unload_postal = request.form.get('unload_postal', '').strip()
 
+        try:
+            # Pobierz współrzędne dla punktu załadunku
+            load_coords = get_coordinates(load_country, load_postal)
+            if not load_coords:
+                return render_template("error.html", message=f"Nie można znaleźć współrzędnych dla: {load_country} {load_postal}")
+            
+            # Pobierz współrzędne dla punktu rozładunku
+            unload_coords = get_coordinates(unload_country, unload_postal)
+            if not unload_coords:
+                return render_template("error.html", message=f"Nie można znaleźć współrzędnych dla: {unload_country} {unload_postal}")
+
+            # Oblicz trasę
+            load_coord_str = f"{load_coords[0]},{load_coords[1]}"
+            unload_coord_str = f"{unload_coords[0]},{unload_coords[1]}"
+            
+            # Przekieruj do wyników z parametrami
+            return redirect(url_for('test_route_result', 
+                                  load=[load_country, load_postal, load_coord_str],
+                                  unload=[unload_country, unload_postal, unload_coord_str]))
+
+        except Exception as e:
+            return render_template("error.html", message=str(e))
+
+    return render_template("test_route_form.html")
+
+@app.route("/test_route_result")
+def test_route_result():
+    return render_template("test_route_result.html", 
+                         load=request.args.getlist('load'),
+                         unload=request.args.getlist('unload'),
+                         dist=request.args.get('dist'))
 
 @app.route("/test_truck_route")
 def test_truck_route():
     coord_from = request.args.get('from', '50.433792,7.466426')
     coord_to = request.args.get('to', '48.237324,13.824039')
     routing_mode = request.args.get('mode', DEFAULT_ROUTING_MODE)
-    avoid_switzerland = request.args.get('avoid', 'false').lower() in ('true', 'yes', '1')
+    fuel_cost = float(request.args.get('fuel_cost', '0.40'))  # Domyślny koszt paliwa
+    driver_cost = float(request.args.get('driver_cost', '130'))  # Domyślny koszt kierowcy
+    
     try:
         lat1, lon1 = map(float, coord_from.split(','))
         lat2, lon2 = map(float, coord_to.split(','))
-        cache_key = f"{lat1:.6f},{lon1:.6f}_{lat2:.6f},{lon2:.6f}_{avoid_switzerland}_{routing_mode}"
-        if cache_key in route_cache:
-            dist = route_cache[cache_key]
+        
+        # Użyj tej samej funkcji co w procesie Excel
+        result = get_route_distance([lat1, lon1], [lat2, lon2], avoid_switzerland=True, routing_mode=routing_mode)
+        
+        if result:
+            # Pobierz dist_ptv tak samo jak w procesie Excel
+            if isinstance(result, dict) and 'distance' in result:
+                dist = result['distance']
+            else:
+                dist = result
             travel_time = (dist / 80) * 60 if dist else 0
+            
+            # Oblicz koszt paliwa
+            fuel_cost_value = dist * fuel_cost
+            
+            # Oblicz koszt kierowcy na podstawie dystansu, tak jak w procesie Excel
+            driver_days = None
+            if dist <= 350:
+                driver_days = 1
+            elif 351 <= dist <= 500:
+                driver_days = 1.25
+            elif 501 <= dist <= 700:
+                driver_days = 1.5
+            elif 701 <= dist <= 1100:
+                driver_days = 2
+            elif 1101 <= dist <= 1700:
+                driver_days = 3
+            elif 1701 <= dist <= 2300:
+                driver_days = 4
+            elif 2301 <= dist <= 2900:
+                driver_days = 5
+            elif 2901 <= dist <= 3500:
+                driver_days = 6
+            else:
+                driver_days = None
+                
+            driver_cost_value = driver_days * driver_cost if driver_days is not None else None
+            
+            # Pobierz informacje o opłatach drogowych
+            toll_details = result.get('toll_details', {})
+            total_toll = result.get('toll_cost', 0)
+            toll_text = "\n".join([f"{country}: {cost}€" for country, cost in toll_details.items()])
+            toll_per_km = total_toll / dist if dist > 0 else 0
+            
+            # Oblicz koszt podlotu (tak samo jak w procesie Excel)
+            podlot = 100  # domyślna wartość podlotu w km
+            oplaty_drogowe_podlot = podlot * 0.30 if podlot is not None else None
+
+            # Oblicz sumę kosztów
+            suma_kosztow = 0
+            for cost in [total_toll, fuel_cost_value, driver_cost_value, oplaty_drogowe_podlot]:
+                if cost is not None:
+                    suma_kosztow += cost
+            
+            # Lista krajów na trasie
+            countries = list(toll_details.keys()) if toll_details else ["Brak informacji o krajach"]
+            
+            # Pobierz polyline z odpowiedzi PTV i przekształć na format GeoJSON
+            polyline = ''
+            if isinstance(result, dict) and 'polyline' in result:
+                polyline = result['polyline']
+                # Jeśli to nie jest format GeoJSON, przekształć na niego
+                if not polyline.startswith('{"type":'):
+                    try:
+                        # Dekoduj polyline do listy punktów
+                        points = decode_polyline(polyline)
+                        # Przekształć na format GeoJSON
+                        polyline = json.dumps({
+                            "type": "LineString",
+                            "coordinates": [[point[1], point[0]] for point in points]
+                        })
+                    except Exception as e:
+                        print(f"Błąd podczas konwersji polyline: {e}")
+
             return jsonify({
                 'status': 'success',
-                'dystans_km': dist,
-                'czas_min': travel_time,
-                'kraje': ["Z cache - brak informacji o krajach"]
-            })
-        base_url = "https://api.myptv.com/routing/v1/routes"
-        params = {
-            "waypoints": [f"{lat1},{lon1}", f"{lat2},{lon2}"],
-            "results": "BORDER_EVENTS,POLYLINE",
-            "options[routingMode]": routing_mode,
-            "options[trafficMode]": "AVERAGE"
-        }
-        if avoid_switzerland:
-            params["options[prohibitedCountries]"] = "CH"
-        headers = {"apiKey": PTV_API_KEY}
-        print(f"Wysyłanie zapytania do API PTV z parametrami: {params}")
-        response = requests.get(base_url, params=params, headers=headers)
-        if response.status_code == 200:
-            data = response.json()
-            dist = data.get("distance", 0) / 1000
-            route_cache[cache_key] = dist
-            return jsonify({
-                'status': 'success',
-                'dystans_km': dist,
-                'czas_min': data.get("travelTime", 0) / 60,
-                'kraje': [event.get("country") for event in data.get("borderEvents", [])]
+                'dystans_km': round(dist, 1),
+                'czas_min': round(travel_time, 0),
+                'koszt_paliwa': round(fuel_cost_value, 2),
+                'koszt_kierowcy': round(driver_cost_value, 2),
+                'oplaty_drogowe_szczegoly': toll_text,
+                'suma_oplat_drogowych': round(total_toll, 2),
+                'oplaty_km': round(toll_per_km, 3),
+                'oplaty_drogowe_podlot': round(oplaty_drogowe_podlot, 2) if oplaty_drogowe_podlot is not None else None,
+                'suma_kosztow': round(suma_kosztow, 2),
+                'kraje': countries,
+                'polyline': polyline
             })
         else:
             return jsonify({
                 'status': 'error',
-                'message': f"Błąd API: {response.status_code} - {response.text}"
+                'message': "Nie udało się obliczyć trasy"
             })
     except Exception as e:
         return jsonify({
@@ -3105,6 +3114,42 @@ def test_truck_route():
             'message': f"Błąd: {str(e)}"
         })
 
+@app.route("/test_truck_route_form")
+def test_truck_route_form():
+    return render_template("test_truck_route.html")
+
+@app.route("/test_truck_route_map")
+def test_truck_route_map():
+    """
+    Endpoint zwracający link do mapy Google z trasą
+    """
+    from_coords = request.args.get('from')
+    to_coords = request.args.get('to')
+    
+    if not from_coords or not to_coords:
+        return "Brak wymaganych parametrów", 400
+    
+    try:
+        # Konwertuj współrzędne na listy [lat, lon]
+        from_coords = [float(x) for x in from_coords.split(',')]
+        to_coords = [float(x) for x in to_coords.split(',')]
+        
+        # Pobierz trasę z PTV
+        route_result = get_route_distance(from_coords, to_coords, avoid_switzerland=True,
+                                        routing_mode=DEFAULT_ROUTING_MODE)
+        
+        # Wyciągnij polyline z wyniku
+        polyline = route_result.get('polyline', '') if isinstance(route_result, dict) else ''
+        
+        # Stwórz link do mapy
+        map_link = create_google_maps_link(from_coords, to_coords, polyline)
+        
+        # Przekieruj do Google Maps
+        return redirect(map_link)
+        
+    except Exception as e:
+        route_logger.error(f"Błąd podczas generowania linku do mapy: {str(e)}")
+        return f"Błąd: {str(e)}", 500
 
 def background_processing(file_stream, fuel_cost, driver_cost):
     global RESULT_EXCEL, PROGRESS

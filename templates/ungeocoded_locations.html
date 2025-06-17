@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block title %}Nierozpoznane lokalizacje{% endblock %}
+
+{% block content %}
+    {% if not ungeocoded %}
+        <div class="alert alert-success">
+            <h1>✅ Wszystkie lokalizacje zostały poprawnie zgeokodowane!</h1>
+            <p>Możesz teraz kontynuować przetwarzanie pliku.</p>
+        </div>
+    {% else %}
+        <h1>Nierozpoznane lokalizacje</h1>
+        <div class="alert alert-error">
+            <p>Znaleziono <strong>{{ ungeocoded|length }}</strong> lokalizacji, które wymagają ręcznego geokodowania.</p>
+        </div>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Kraj</th>
+                    <th>Kod pocztowy</th>
+                    <th>Miasto</th>
+                    <th>Klucz</th>
+                    <th>Warianty zapytań</th>
+                    <th>Akcje</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for loc in ungeocoded %}
+                <tr>
+                    <td>{{ loc.country }}</td>
+                    <td>{{ loc.postal_code }}</td>
+                    <td>{{ loc.city }}</td>
+                    <td>{{ loc.key }}</td>
+                    <td>
+                        {% for variant in loc.query_variants %}
+                            <div>{{ variant[0] }}<br><small>(klucz: {{ variant[1] }})</small></div>
+                        {% endfor %}
+                    </td>
+                    <td>
+                        <button onclick="showManualInput('{{ loc.key }}', '{{ loc.country }}', '{{ loc.postal_code }}', '{{ loc.city }}')" class="button button-secondary">
+                            Dodaj współrzędne
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        
+        <div id="manualInputModal" style="display:none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+            <div style="background: white; margin: 100px auto; padding: 20px; max-width: 500px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                <h2>Dodaj współrzędne ręcznie</h2>
+                <form id="manualCoordForm" onsubmit="submitCoordinates(event)" class="form">
+                    <input type="hidden" id="locationKey" name="key">
+                    
+                    <div class="form-group">
+                        <label for="countryInput">Kraj:</label>
+                        <input type="text" id="countryInput" readonly>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="postalCodeInput">Kod pocztowy:</label>
+                        <input type="text" id="postalCodeInput" readonly>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="cityInput">Miasto:</label>
+                        <input type="text" id="cityInput" readonly>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="latInput">Szerokość geograficzna:</label>
+                        <input type="text" id="latInput" required placeholder="np. 52.2297">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="lonInput">Długość geograficzna:</label>
+                        <input type="text" id="lonInput" required placeholder="np. 21.0122">
+                    </div>
+                    
+                    <div class="form-group" style="text-align: right;">
+                        <button type="button" onclick="closeModal()" class="button button-secondary">Anuluj</button>
+                        <button type="submit" class="button">Zapisz współrzędne</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    {% endif %}
+    
+    <script>
+    function showManualInput(key, country, postalCode, city) {
+        document.getElementById('locationKey').value = key;
+        document.getElementById('countryInput').value = country;
+        document.getElementById('postalCodeInput').value = postalCode;
+        document.getElementById('cityInput').value = city;
+        document.getElementById('manualInputModal').style.display = 'block';
+    }
+    
+    function closeModal() {
+        document.getElementById('manualInputModal').style.display = 'none';
+    }
+    
+    function submitCoordinates(event) {
+        event.preventDefault();
+        const key = document.getElementById('locationKey').value;
+        const lat = parseFloat(document.getElementById('latInput').value);
+        const lon = parseFloat(document.getElementById('lonInput').value);
+        
+        fetch('/save_manual_coordinates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: key, latitude: lat, longitude: lon })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert('✅ Współrzędne zostały zapisane!');
+                location.reload();
+            } else {
+                alert('❌ Błąd: ' + data.message);
+            }
+        });
+    }
+    </script>
+{% endblock %} 

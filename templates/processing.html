@@ -1,0 +1,366 @@
+{% extends "base.html" %}
+
+{% block title %}Przetwarzanie pliku{% endblock %}
+
+{% block content %}
+    <div class="content-wrapper">
+        <h1>Przetwarzanie pliku</h1>
+        
+        <div class="alert alert-success">
+            <p id="postep">⏳ Trwa przetwarzanie...</p>
+        </div>
+        
+        <div class="progress-bar">
+            <div id="progress-fill" class="progress-bar-fill" style="width: 0%"></div>
+        </div>
+        
+        <div id="download-link" style="display:none;" class="form-group">
+            <a href="/download" class="button">📥 Pobierz wynikowy plik Excel</a>
+        </div>
+        
+        <div id="geocode-link" style="display:none;" class="form-group">
+            <a href="/ungeocoded_locations" class="button button-secondary">🌍 Uzupełnij brakujące lokalizacje</a>
+        </div>
+
+        <div id="preview-container" style="margin-top: 0.75rem; display: none;">
+            <h2>Podgląd danych</h2>
+            <p class="text-muted">Pokazywane jest 10 ostatnio przetworzonych wierszy</p>
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                        <tr id="preview-headers">
+                        </tr>
+                    </thead>
+                    <tbody id="preview-data">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Kontener dla podglądu mapy -->
+        <div id="map-preview" class="map-preview">
+            <iframe id="map-preview-iframe" frameborder="0"></iframe>
+        </div>
+    </div>
+    
+    <script>
+    function formatNumber(value) {
+        if (value === null || value === undefined || value === '') return '-';
+        if (typeof value === 'number') {
+            return value.toLocaleString('pl-PL', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
+        }
+        return value;
+    }
+
+    function formatMapLink(link) {
+        if (!link || link === '-') return '-';
+        return `<a href="#" 
+                  class="map-link"
+                  onclick="openMapPreview('${link}'); return false;">
+                  🗺️ Zobacz na mapie
+               </a>`;
+    }
+
+    function openMapPreview(mapUrl) {
+        // Wymiary okna
+        const width = 1000;
+        const height = 800;
+        
+        // Pobierz wymiary ekranu z uwzględnieniem wielu monitorów
+        const screenLeft = window.screenLeft || window.screenX;
+        const screenTop = window.screenTop || window.screenY;
+        
+        // Oblicz pozycję okna aby było na środku aktywnego monitora
+        const left = Math.round(screenLeft + (window.outerWidth - width) / 2);
+        const top = Math.round(screenTop + (window.outerHeight - height) / 2);
+        
+        // Otwórz okno
+        window.open(
+            mapUrl,
+            'mapPreview',
+            `width=${width},
+             height=${height},
+             left=${left},
+             top=${top},
+             status=no,
+             menubar=no,
+             toolbar=no,
+             location=no,
+             resizable=yes,
+             scrollbars=yes`
+        );
+    }
+
+    function showMapPreview(element, mapUrl) {
+        const preview = document.getElementById('map-preview');
+        
+        // Ustaw pozycję podglądu
+        const rect = element.getBoundingClientRect();
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        
+        preview.style.left = rect.left + 'px';
+        preview.style.top = (rect.bottom + scrollTop + 10) + 'px';
+        
+        // Ustaw tło z mapą
+        preview.style.backgroundImage = `url('${mapUrl}')`;
+        
+        // Pokaż podgląd
+        preview.style.display = 'block';
+    }
+
+    function hideMapPreview() {
+        const preview = document.getElementById('map-preview');
+        preview.style.display = 'none';
+        preview.style.backgroundImage = '';
+    }
+
+    // Dodaj div dla podglądu mapy jeśli nie istnieje
+    if (!document.getElementById('map-preview')) {
+        const mapPreview = document.createElement('div');
+        mapPreview.id = 'map-preview';
+        mapPreview.className = 'map-preview';
+        document.body.appendChild(mapPreview);
+    }
+
+    function updatePreviewTable(data) {
+        const container = document.getElementById('preview-container');
+        const headers = document.getElementById('preview-headers');
+        const tbody = document.getElementById('preview-data');
+        
+        // Pokaż kontener jeśli są dane
+        if (data.preview_data && data.preview_data.rows && data.preview_data.rows.length > 0) {
+            container.style.display = 'block';
+            
+            // Aktualizuj nagłówki
+            if (data.preview_data.headers) {
+                headers.innerHTML = data.preview_data.headers
+                    .map(header => `<th>${header}</th>`)
+                    .join('');
+            }
+            
+            // Aktualizuj dane
+            tbody.innerHTML = data.preview_data.rows
+                .map(row => `
+                    <tr>
+                        <td>${row['Kraj załadunku'] || '-'}</td>
+                        <td>${row['Kod pocztowy załadunku'] || '-'}</td>
+                        <td>${row['Kraj rozładunku'] || '-'}</td>
+                        <td>${row['Kod pocztowy rozładunku'] || '-'}</td>
+                        <td>${formatNumber(row['Dystans (km)'])}</td>
+                        <td>${formatNumber(row['Koszt paliwa'])}</td>
+                        <td>${formatNumber(row['Koszt kierowcy'])}</td>
+                        <td style="white-space: pre-line">${row['Opłaty drogowe (szczegóły)']}</td>
+                        <td>${formatNumber(row['Suma opłat drogowych'])}€</td>
+                        <td>${formatNumber(row['Opłaty/km'])}€/km</td>
+                        <td>${formatNumber(row['Suma kosztów'])}€</td>
+                        <td>${formatMapLink(row['Link do mapy'])}</td>
+                    </tr>
+                `)
+                .join('');
+        }
+    }
+
+    function checkProgress() {
+        fetch('/progress')
+            .then(response => response.json())
+            .then(data => {
+                let message = `⏳ Przeliczanie: ${data.current} z ${data.total} (${data.progress}%)`;
+                if (data.geocoding_progress !== undefined) {
+                    message += ` | Geokodowanie: ${data.geocoding_progress}%`;
+                }
+                document.getElementById("postep").innerText = message;
+                document.getElementById("progress-fill").style.width = data.progress + "%";
+                
+                // Aktualizuj tabelę podglądu
+                updatePreviewTable(data);
+                
+                if (data.progress >= 100) {
+                    document.getElementById("postep").innerText = "✅ Gotowe! Możesz pobrać wynik.";
+                    document.getElementById("download-link").style.display = "block";
+                    clearInterval(timer);
+                }
+                if (data.progress === -2) {
+                    document.getElementById("postep").innerText = "⚠️ Wymagane ręczne uzupełnienie lokalizacji!";
+                    document.getElementById("geocode-link").style.display = "block";
+                    clearInterval(timer);
+                }
+            });
+    }
+    let timer = setInterval(checkProgress, 1000);
+    </script>
+
+    <style>
+    .content-wrapper {
+        width: 95%;
+        max-width: 1800px;
+        margin: 0 auto;
+        padding: 1rem;
+        background-color: white;
+        box-shadow: 0 0 10px rgba(0,0,0,0.05);
+        min-height: 100vh;
+    }
+
+    .table-responsive {
+        overflow-x: auto;
+        margin: 0.5rem 0;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        background-color: white;
+    }
+    
+    .table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 0;
+        font-size: 0.82rem;
+    }
+    
+    .table th,
+    .table td {
+        padding: 0.3rem 0.4rem;
+        text-align: left;
+        border: 1px solid var(--border-color);
+        vertical-align: middle;
+        line-height: 1.2;
+    }
+    
+    .table th {
+        background-color: #f8f9fa;
+        font-weight: 600;
+        white-space: nowrap;
+        font-size: 0.82rem;
+        padding: 0.35rem 0.4rem;
+    }
+    
+    .table tr:nth-child(even) {
+        background-color: #f8f9fa;
+    }
+    
+    .table tr:hover {
+        background-color: #f2f2f2;
+    }
+    
+    .text-muted {
+        color: #6c757d;
+        font-size: 0.75rem;
+        margin: 0.25rem 0 0.5rem 0;
+    }
+    
+    .map-link {
+        color: #007bff;
+        text-decoration: none;
+        cursor: pointer;
+        font-size: 0.82rem;
+        white-space: nowrap;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    .map-link:hover {
+        text-decoration: underline;
+        color: #0056b3;
+    }
+
+    .map-preview {
+        display: none;
+        position: absolute;
+        z-index: 1000;
+        background-color: #f8f9fa;
+        background-position: center;
+        background-repeat: no-repeat;
+        background-size: cover;
+        border: 1px solid #ddd;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        border-radius: 8px;
+        width: 400px;
+        height: 300px;
+        pointer-events: none;
+    }
+
+    .map-preview iframe {
+        width: 800px;
+        height: 600px;
+        border: none;
+        display: block;
+    }
+
+    h1 {
+        font-size: 1.4rem;
+        margin-bottom: 0.75rem;
+    }
+
+    h2 {
+        font-size: 1.1rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .alert {
+        padding: 0.4rem 0.6rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .progress-bar {
+        margin-bottom: 0.75rem;
+    }
+
+    .form-group {
+        margin-bottom: 0.75rem;
+    }
+    
+    @media (max-width: 992px) {
+        .map-preview iframe {
+            width: 600px;
+            height: 450px;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .content-wrapper {
+            width: 100%;
+            padding: 0.5rem;
+        }
+
+        .table {
+            font-size: 0.75rem;
+        }
+        
+        .table th,
+        .table td {
+            padding: 0.25rem 0.3rem;
+        }
+
+        .table th {
+            font-size: 0.75rem;
+            padding: 0.3rem;
+        }
+
+        .map-preview {
+            width: 300px;
+            height: 225px;
+        }
+
+        h1 {
+            font-size: 1.2rem;
+        }
+
+        h2 {
+            font-size: 1rem;
+        }
+
+        .alert {
+            padding: 0.35rem 0.5rem;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .map-preview {
+            width: 240px;
+            height: 180px;
+        }
+    }
+    </style>
+{% endblock %} 

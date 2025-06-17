@@ -1,10 +1,163 @@
-<!doctype html>
-<html>
-  <body>
-    <h2>Wynik testu trasy</h2>
-    <p>Załadunek: {{ load[0] }} {{ load[1] }}</p>
-    <p>Rozładunek: {{ unload[0] }} {{ unload[1] }}</p>
-    <p>Dystans (km): {{ dist }}</p>
-    <a href="/test_route_form">Nowy test</a>
-  </body>
-</html>
+{% extends "base.html" %}
+
+{% block title %}Wynik testu trasy{% endblock %}
+
+{% block content %}
+    <style>
+        h1 {
+            font-size: 1.5em;
+            margin-bottom: 15px;
+        }
+        h3 {
+            font-size: 1.2em;
+            margin: 10px 0;
+        }
+        .form-group {
+            margin-bottom: 8px;
+        }
+        .alert {
+            padding: 10px;
+        }
+        #route-details .form-group {
+            margin-bottom: 6px;
+        }
+        pre {
+            margin: 5px 0;
+        }
+        .button-group {
+            margin-top: 15px;
+        }
+    </style>
+
+    <h1>Wynik testu trasy</h1>
+    
+    <div class="alert alert-success">
+        <h3>Szczegóły trasy:</h3>
+        <div class="form-group">
+            <strong>Załadunek:</strong> {{ load[0] }} {{ load[1] }}
+            <br>
+            <small>Współrzędne: {{ load[2] }}</small>
+        </div>
+        <div class="form-group">
+            <strong>Rozładunek:</strong> {{ unload[0] }} {{ unload[1] }}
+            <br>
+            <small>Współrzędne: {{ unload[2] }}</small>
+        </div>
+        <div id="route-details">
+            <div class="form-group">
+                <strong>Dystans:</strong> <span id="distance">Obliczanie...</span>
+            </div>
+            <div class="form-group">
+                <strong>Czas przejazdu:</strong> <span id="time">Obliczanie...</span>
+            </div>
+            <div class="form-group">
+                <strong>Koszt paliwa:</strong> <span id="fuel-cost">Obliczanie...</span>
+            </div>
+            <div class="form-group">
+                <strong>Koszt kierowcy:</strong> <span id="driver-cost">Obliczanie...</span>
+                <br>
+                <small>Liczba dni: <span id="driver-days">Obliczanie...</span></small>
+            </div>
+            <div class="form-group">
+                <strong>Opłaty drogowe (szczegóły):</strong>
+                <pre id="toll-details" style="white-space: pre-line; margin: 3px 0;">Obliczanie...</pre>
+            </div>
+            <div class="form-group">
+                <strong>Suma opłat drogowych:</strong> <span id="total-toll">Obliczanie...</span>
+            </div>
+            <div class="form-group">
+                <strong>Opłaty/km:</strong> <span id="toll-per-km">Obliczanie...</span>
+            </div>
+            <div class="form-group">
+                <strong>Opłaty drogowe podlot:</strong> <span id="toll-podlot">Obliczanie...</span>
+                <br>
+                <small>(100 km × 0.30€/km)</small>
+            </div>
+            <div class="form-group">
+                <strong>Suma kosztów:</strong> <span id="total-cost">Obliczanie...</span>
+            </div>
+            <div class="form-group">
+                <strong>Kraje na trasie:</strong> <span id="countries">Obliczanie...</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="form-group button-group">
+        <button onclick="openMapPreview('/test_truck_route_map?from={{ load[2] }}&to={{ unload[2] }}')" class="button">Pokaż mapę</button>
+        <a href="/test_route_form" class="button">Nowy test trasy</a>
+    </div>
+
+    <script>
+        function openMapPreview(mapUrl) {
+            // Wymiary okna
+            const width = 1000;
+            const height = 800;
+            
+            // Pobierz wymiary ekranu z uwzględnieniem wielu monitorów
+            const screenLeft = window.screenLeft || window.screenX;
+            const screenTop = window.screenTop || window.screenY;
+            
+            // Oblicz pozycję okna aby było na środku aktywnego monitora
+            const left = Math.round(screenLeft + (window.outerWidth - width) / 2);
+            const top = Math.round(screenTop + (window.outerHeight - height) / 2);
+            
+            // Otwórz okno
+            window.open(
+                mapUrl,
+                'mapPreview',
+                `width=${width},
+                 height=${height},
+                 left=${left},
+                 top=${top},
+                 status=no,
+                 menubar=no,
+                 toolbar=no,
+                 location=no,
+                 resizable=yes,
+                 scrollbars=yes`
+            );
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const loadCoords = "{{ load[2] }}";
+            const unloadCoords = "{{ unload[2] }}";
+            
+            fetch(`/test_truck_route?from=${loadCoords}&to=${unloadCoords}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        document.getElementById('distance').textContent = 
+                            data.dystans_km + ' km';
+                        document.getElementById('time').textContent = 
+                            Math.round(data.czas_min) + ' minut';
+                        document.getElementById('fuel-cost').textContent = 
+                            data.koszt_paliwa + ' €';
+                        document.getElementById('driver-cost').textContent = 
+                            data.koszt_kierowcy !== null ? data.koszt_kierowcy + ' €' : 'Nie dotyczy';
+                        document.getElementById('driver-days').textContent = 
+                            (data.dni_kierowcy !== null && data.dni_kierowcy !== undefined) ? 
+                                Number(data.dni_kierowcy).toFixed(2).replace('.00', '') : 'Nie dotyczy';
+                        document.getElementById('toll-details').textContent = 
+                            data.oplaty_drogowe_szczegoly || 'Brak szczegółów';
+                        document.getElementById('total-toll').textContent = 
+                            data.suma_oplat_drogowych + ' €';
+                        document.getElementById('toll-per-km').textContent = 
+                            data.oplaty_km + ' €/km';
+                        document.getElementById('toll-podlot').textContent = 
+                            data.oplaty_drogowe_podlot + ' €';
+                        document.getElementById('total-cost').textContent = 
+                            data.suma_kosztow + ' €';
+                        document.getElementById('countries').textContent = 
+                            data.kraje.join(' → ');
+                    } else {
+                        document.getElementById('route-details').innerHTML = 
+                            `<div class="alert alert-danger">Błąd: ${data.message}</div>`;
+                    }
+                })
+                .catch(error => {
+                    document.getElementById('route-details').innerHTML = 
+                        `<div class="alert alert-danger">Błąd: ${error}</div>`;
+                });
+        });
+    </script>
+{% endblock %}

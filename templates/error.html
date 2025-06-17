@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+
+{% block title %}Błąd{% endblock %}
+
+{% block content %}
+    <div class="alert alert-error">
+        <h1>Błąd</h1>
+        <p>{{ message }}</p>
+    </div>
+    <div class="form-group">
+        <a href="/" class="button">« Powrót</a>
+    </div>
+{% endblock %} 

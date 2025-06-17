@@ -1,13 +1,33 @@
-<!doctype html>
-<html>
-  <body>
-    <h2>Test trasy</h2>
-    <form method="post">
-      <input name="load_country" placeholder="PL" required>
-      <input name="load_postal"  placeholder="00" required><br>
-      <input name="unload_country" placeholder="DE" required>
-      <input name="unload_postal"  placeholder="80" required><br>
-      <button type="submit">Sprawdź</button>
+{% extends "base.html" %}
+
+{% block title %}Test trasy{% endblock %}
+
+{% block content %}
+    <h1>Test trasy</h1>
+    
+    <form method="post" class="form">
+        <div class="form-group">
+            <label for="load_country">Kraj załadunku:</label>
+            <input type="text" id="load_country" name="load_country" placeholder="PL" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="load_postal">Kod pocztowy załadunku:</label>
+            <input type="text" id="load_postal" name="load_postal" placeholder="00-000" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="unload_country">Kraj rozładunku:</label>
+            <input type="text" id="unload_country" name="unload_country" placeholder="DE" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="unload_postal">Kod pocztowy rozładunku:</label>
+            <input type="text" id="unload_postal" name="unload_postal" placeholder="00000" required>
+        </div>
+        
+        <div class="form-group">
+            <button type="submit">Sprawdź trasę</button>
+        </div>
     </form>
-  </body>
-</html>
+{% endblock %}

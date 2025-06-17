@@ -1,30 +1,28 @@
-<!doctype html>
-<html lang="pl">
-  <head>
-    <meta charset="utf-8">
-    <title>Wgrywanie pliku wycen</title>
-  </head>
-  <body>
-    <h2>Wgrywanie pliku do wyceny tras</h2>
-    <form method="post" enctype="multipart/form-data">
-      <div>
-        <label>Plik Excel:
-          <input type="file" name="file" accept=".xlsx,.xls" required>
-        </label>
-      </div>
-      <div>
-        <label>Koszt paliwa (PLN/km):
-          <input type="number" name="fuel_cost" step="0.01" required>
-        </label>
-      </div>
-      <div>
-        <label>Koszt kierowcy (PLN):
-          <input type="number" name="driver_cost" step="0.01" required>
-        </label>
-      </div>
-      <div>
-        <button type="submit">Rozpocznij przetwarzanie</button>
-      </div>
+{% extends "base.html" %}
+
+{% block title %}Wgrywanie pliku wycen{% endblock %}
+
+{% block content %}
+    <h1>Wgrywanie pliku Excel z przetargami</h1>
+    
+    <form method="post" enctype="multipart/form-data" class="form">
+        <div class="form-group">
+            <label for="file">Plik Excel:</label>
+            <input type="file" id="file" name="file" accept=".xlsx,.xls" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="fuel_cost">Koszt paliwa (€/km):</label>
+            <input type="number" id="fuel_cost" name="fuel_cost" step="0.01" value="0.40" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="driver_cost">Koszt kierowcy (€/dzień):</label>
+            <input type="number" id="driver_cost" name="driver_cost" step="0.01" value="130" required>
+        </div>
+        
+        <div class="form-group">
+            <button type="submit">Rozpocznij przetwarzanie</button>
+        </div>
     </form>
-  </body>
-</html>
+{% endblock %}
