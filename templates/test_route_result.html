@@ -1,163 +1,322 @@
 {% extends "base.html" %}
 
-{% block title %}Wynik testu trasy{% endblock %}
+{% block title %}Wyniki testu trasy{% endblock %}
+
+{% block head %}
+<style>
+    .route-info {
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 20px;
+    }
+    
+    .route-points {
+        display: flex;
+        align-items: center;
+        margin-bottom: 15px;
+    }
+    
+    .route-point {
+        flex: 1;
+        text-align: center;
+        padding: 15px;
+        background-color: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    }
+    
+    .route-arrow {
+        margin: 0 15px;
+        color: var(--primary-color);
+        font-size: 24px;
+    }
+    
+    .route-details {
+        margin-top: 20px;
+    }
+    
+    .route-detail-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--border-color);
+    }
+    
+    .route-detail-item:last-child {
+        border-bottom: none;
+    }
+    
+    .route-detail-label {
+        font-weight: 500;
+        color: var(--dark-gray);
+    }
+    
+    .route-detail-value {
+        font-weight: 700;
+    }
+    
+    .map-container {
+        height: 400px;
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        margin-top: 20px;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .map-placeholder {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        color: var(--medium-gray);
+    }
+    
+    .map-placeholder i {
+        font-size: 48px;
+        margin-bottom: 15px;
+    }
+</style>
+{% endblock %}
 
 {% block content %}
-    <style>
-        h1 {
-            font-size: 1.5em;
-            margin-bottom: 15px;
-        }
-        h3 {
-            font-size: 1.2em;
-            margin: 10px 0;
-        }
-        .form-group {
-            margin-bottom: 8px;
-        }
-        .alert {
-            padding: 10px;
-        }
-        #route-details .form-group {
-            margin-bottom: 6px;
-        }
-        pre {
-            margin: 5px 0;
-        }
-        .button-group {
-            margin-top: 15px;
-        }
-    </style>
-
-    <h1>Wynik testu trasy</h1>
-    
-    <div class="alert alert-success">
-        <h3>Szczegóły trasy:</h3>
-        <div class="form-group">
-            <strong>Załadunek:</strong> {{ load[0] }} {{ load[1] }}
-            <br>
-            <small>Współrzędne: {{ load[2] }}</small>
+<div class="card">
+    <div class="card-header">
+        <div>
+            <i class="fas fa-route"></i> Wyniki testu trasy
         </div>
-        <div class="form-group">
-            <strong>Rozładunek:</strong> {{ unload[0] }} {{ unload[1] }}
-            <br>
-            <small>Współrzędne: {{ unload[2] }}</small>
+        <div>
+            <a href="/test_route_form" class="btn btn-secondary">
+                <i class="fas fa-arrow-left"></i> Powrót do formularza
+            </a>
         </div>
-        <div id="route-details">
-            <div class="form-group">
-                <strong>Dystans:</strong> <span id="distance">Obliczanie...</span>
+    </div>
+    <div class="card-body">
+        <div class="route-info">
+            <div class="route-points">
+                <div class="route-point">
+                    <h5>Punkt załadunku</h5>
+                    <div><strong>Kraj:</strong> {{ load[0] }}</div>
+                    <div><strong>Kod pocztowy:</strong> {{ load[1] }}</div>
+                    <div><strong>Współrzędne:</strong> {{ load[2] }}</div>
+                </div>
+                <div class="route-arrow">
+                    <i class="fas fa-arrow-right"></i>
+                </div>
+                <div class="route-point">
+                    <h5>Punkt rozładunku</h5>
+                    <div><strong>Kraj:</strong> {{ unload[0] }}</div>
+                    <div><strong>Kod pocztowy:</strong> {{ unload[1] }}</div>
+                    <div><strong>Współrzędne:</strong> {{ unload[2] }}</div>
+                </div>
             </div>
-            <div class="form-group">
-                <strong>Czas przejazdu:</strong> <span id="time">Obliczanie...</span>
+        </div>
+        
+        <div id="loading-container" class="text-center p-3">
+            <div class="spinner"></div>
+            <p class="mt-2">Obliczanie trasy i kosztów...</p>
+        </div>
+        
+        <div id="results-container" style="display: none;">
+            <div class="d-flex justify-content-between mb-3">
+                <h5>Szczegóły trasy</h5>
+                <a id="map-link" href="#" target="_blank" class="btn btn-primary">
+                    <i class="fas fa-map-marked-alt"></i> Zobacz na mapie
+                </a>
             </div>
-            <div class="form-group">
-                <strong>Koszt paliwa:</strong> <span id="fuel-cost">Obliczanie...</span>
+            
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            <i class="fas fa-road"></i> Dystans i opłaty
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="route-details">
+                                <div class="route-detail-item">
+                                    <span class="route-detail-label">Dystans:</span>
+                                    <span id="distance" class="route-detail-value">-</span>
+                                </div>
+                        <div class="route-detail-item">
+                                    <span class="route-detail-label">Podlot:</span>
+                                    <span id="approach-distance" class="route-detail-value">-</span>
+                                </div>        
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="col-md-6">
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            <i class="fas fa-euro-sign"></i> Koszty
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="route-details">
+                                <div class="route-detail-item">
+                                    <span class="route-detail-label">Koszt paliwa:</span>
+                                    <span id="fuel-cost" class="route-detail-value">-</span>
+                                </div>
+                                <div class="route-detail-item">
+                                    <span class="route-detail-label">Koszt kierowcy + leasing:</span>
+                                    <span id="driver-cost" class="route-detail-value">-</span>
+                                </div>
+                                <div class="route-detail-item">
+                                    <span class="route-detail-label">Opłaty drogowe:</span>
+                                    <span id="road-tolls" class="route-detail-value">-</span>
+                                </div>
+                                <div class="route-detail-item">
+                                    <span class="route-detail-label">Opłaty podlot:</span>
+                                    <span id="approach-tolls" class="route-detail-value">-</span>
+                                </div>
+                                <div class="route-detail-item">
+                                    <span class="route-detail-label">Opłaty dodatkowe:</span>
+                                    <span id="other-tolls" class="route-detail-value">-</span>
+                                </div>
+                                <div class="route-detail-item">
+                                    <span class="route-detail-label">Opłaty na km:</span>
+                                    <span id="tolls-per-km" class="route-detail-value">-</span>
+                                </div>
+                                <div class="route-detail-item">
+                                    <span class="route-detail-label">Suma kosztów:</span>
+                                    <span id="total-cost" class="route-detail-value">-</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="form-group">
-                <strong>Koszt kierowcy:</strong> <span id="driver-cost">Obliczanie...</span>
-                <br>
-                <small>Liczba dni: <span id="driver-days">Obliczanie...</span></small>
+            
+            <div class="card mb-3">
+                <div class="card-header">
+                    <i class="fas fa-history"></i> Historyczne stawki wg regionów
+                </div>
+                <div class="card-body p-0">
+                    <div class="route-details">
+                        <div class="route-detail-item">
+                            <span class="route-detail-label">Stawka klienta (3m):</span>
+                            <span id="client-rate-3m" class="route-detail-value">-</span>
+                        </div>
+                        <div class="route-detail-item">
+                            <span class="route-detail-label">Stawka klienta (6m):</span>
+                            <span id="client-rate-6m" class="route-detail-value">-</span>
+                        </div>
+                        <div class="route-detail-item">
+                            <span class="route-detail-label">Stawka klienta (12m):</span>
+                            <span id="client-rate-12m" class="route-detail-value">-</span>
+                        </div>
+                        <div class="route-detail-item">
+                            <span class="route-detail-label">Stawka giełdy (3m):</span>
+                            <span id="exchange-rate-3m" class="route-detail-value">-</span>
+                        </div>
+                        <div class="route-detail-item">
+                            <span class="route-detail-label">Stawka giełdy (6m):</span>
+                            <span id="exchange-rate-6m" class="route-detail-value">-</span>
+                        </div>
+                        <div class="route-detail-item">
+                            <span class="route-detail-label">Stawka giełdy (12m):</span>
+                            <span id="exchange-rate-12m" class="route-detail-value">-</span>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="form-group">
-                <strong>Opłaty drogowe (szczegóły):</strong>
-                <pre id="toll-details" style="white-space: pre-line; margin: 3px 0;">Obliczanie...</pre>
+            
+            <div class="card mb-3">
+                <div class="card-header">
+                    <i class="fas fa-info-circle"></i> Szczegóły opłat drogowych
+                </div>
+                <div class="card-body">
+                    <pre id="toll-details" class="mb-0" style="white-space: pre-wrap;">-</pre>
+                </div>
             </div>
-            <div class="form-group">
-                <strong>Suma opłat drogowych:</strong> <span id="total-toll">Obliczanie...</span>
-            </div>
-            <div class="form-group">
-                <strong>Opłaty/km:</strong> <span id="toll-per-km">Obliczanie...</span>
-            </div>
-            <div class="form-group">
-                <strong>Opłaty drogowe podlot:</strong> <span id="toll-podlot">Obliczanie...</span>
-                <br>
-                <small>(100 km × 0.30€/km)</small>
-            </div>
-            <div class="form-group">
-                <strong>Suma kosztów:</strong> <span id="total-cost">Obliczanie...</span>
-            </div>
-            <div class="form-group">
-                <strong>Kraje na trasie:</strong> <span id="countries">Obliczanie...</span>
+            
+            <div class="card">
+                <div class="card-header">
+                    <i class="fas fa-globe-europe"></i> Kraje na trasie
+                </div>
+                <div class="card-body">
+                    <div id="countries-list">-</div>
+                </div>
             </div>
         </div>
     </div>
+</div>
+{% endblock %}
 
-    <div class="form-group button-group">
-        <button onclick="openMapPreview('/test_truck_route_map?from={{ load[2] }}&to={{ unload[2] }}')" class="button">Pokaż mapę</button>
-        <a href="/test_route_form" class="button">Nowy test trasy</a>
-    </div>
-
-    <script>
-        function openMapPreview(mapUrl) {
-            // Wymiary okna
-            const width = 1000;
-            const height = 800;
-            
-            // Pobierz wymiary ekranu z uwzględnieniem wielu monitorów
-            const screenLeft = window.screenLeft || window.screenX;
-            const screenTop = window.screenTop || window.screenY;
-            
-            // Oblicz pozycję okna aby było na środku aktywnego monitora
-            const left = Math.round(screenLeft + (window.outerWidth - width) / 2);
-            const top = Math.round(screenTop + (window.outerHeight - height) / 2);
-            
-            // Otwórz okno
-            window.open(
-                mapUrl,
-                'mapPreview',
-                `width=${width},
-                 height=${height},
-                 left=${left},
-                 top=${top},
-                 status=no,
-                 menubar=no,
-                 toolbar=no,
-                 location=no,
-                 resizable=yes,
-                 scrollbars=yes`
-            );
-        }
-
-        document.addEventListener('DOMContentLoaded', function() {
-            const loadCoords = "{{ load[2] }}";
-            const unloadCoords = "{{ unload[2] }}";
-            
-            fetch(`/test_truck_route?from=${loadCoords}&to=${unloadCoords}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'success') {
-                        document.getElementById('distance').textContent = 
-                            data.dystans_km + ' km';
-                        document.getElementById('time').textContent = 
-                            Math.round(data.czas_min) + ' minut';
-                        document.getElementById('fuel-cost').textContent = 
-                            data.koszt_paliwa + ' €';
-                        document.getElementById('driver-cost').textContent = 
-                            data.koszt_kierowcy !== null ? data.koszt_kierowcy + ' €' : 'Nie dotyczy';
-                        document.getElementById('driver-days').textContent = 
-                            (data.dni_kierowcy !== null && data.dni_kierowcy !== undefined) ? 
-                                Number(data.dni_kierowcy).toFixed(2).replace('.00', '') : 'Nie dotyczy';
-                        document.getElementById('toll-details').textContent = 
-                            data.oplaty_drogowe_szczegoly || 'Brak szczegółów';
-                        document.getElementById('total-toll').textContent = 
-                            data.suma_oplat_drogowych + ' €';
-                        document.getElementById('toll-per-km').textContent = 
-                            data.oplaty_km + ' €/km';
-                        document.getElementById('toll-podlot').textContent = 
-                            data.oplaty_drogowe_podlot + ' €';
-                        document.getElementById('total-cost').textContent = 
-                            data.suma_kosztow + ' €';
-                        document.getElementById('countries').textContent = 
-                            data.kraje.join(' → ');
-                    } else {
-                        document.getElementById('route-details').innerHTML = 
-                            `<div class="alert alert-danger">Błąd: ${data.message}</div>`;
-                    }
-                })
-                .catch(error => {
-                    document.getElementById('route-details').innerHTML = 
-                        `<div class="alert alert-danger">Błąd: ${error}</div>`;
-                });
-        });
-    </script>
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const loadingContainer = document.getElementById('loading-container');
+        const resultsContainer = document.getElementById('results-container');
+        
+        // Pobierz współrzędne z URL
+        const coordFrom = "{{ load[2] }}";
+        const coordTo = "{{ unload[2] }}";
+        
+        // Pobierz kody pocztowe i kraje
+        const loadCountry = "{{ load[0] }}";
+        const loadPostal = "{{ load[1] }}";
+        const unloadCountry = "{{ unload[0] }}";
+        const unloadPostal = "{{ unload[1] }}";
+        
+        // Wywołaj API do obliczenia trasy
+        fetch(`/test_truck_route?coord_from=${coordFrom}&coord_to=${coordTo}&load_country=${loadCountry}&load_postal=${loadPostal}&unload_country=${unloadCountry}&unload_postal=${unloadPostal}`)
+            .then(response => response.json())
+            .then(data => {
+                // Ukryj ładowanie, pokaż wyniki
+                loadingContainer.style.display = 'none';
+                resultsContainer.style.display = 'block';
+                
+                // Aktualizuj dane w interfejsie
+                document.getElementById('distance').textContent = `${data.distance} km`;
+                document.getElementById('approach-distance').textContent = data.podlot ? `${data.podlot} km` : '-';
+                document.getElementById('road-tolls').textContent = `${data.oplaty_drogowe}€`;
+                document.getElementById('other-tolls').textContent = `${data.oplaty_dodatkowe}€`;
+                document.getElementById('tolls-per-km').textContent = `${data.oplaty_na_km}€/km`;
+                
+                document.getElementById('fuel-cost').textContent = `${data.koszt_paliwa}€`;
+                document.getElementById('driver-cost').textContent = `${data.koszt_kierowcy}€`;
+                document.getElementById('approach-tolls').textContent = `${data.oplaty_drogowe_podlot}€`;
+                document.getElementById('total-cost').textContent = `${data.suma_kosztow}€`;
+                
+                // Aktualizuj historyczne stawki
+                document.getElementById('client-rate-3m').textContent = data.region_klient_stawka_3m ? `${data.region_klient_stawka_3m}€/km` : '-';
+                document.getElementById('client-rate-6m').textContent = data.region_klient_stawka_6m ? `${data.region_klient_stawka_6m}€/km` : '-';
+                document.getElementById('client-rate-12m').textContent = data.region_klient_stawka_12m ? `${data.region_klient_stawka_12m}€/km` : '-';
+                document.getElementById('exchange-rate-3m').textContent = data.region_gielda_stawka_3m ? `${data.region_gielda_stawka_3m}€/km` : '-';
+                document.getElementById('exchange-rate-6m').textContent = data.region_gielda_stawka_6m ? `${data.region_gielda_stawka_6m}€/km` : '-';
+                document.getElementById('exchange-rate-12m').textContent = data.region_gielda_stawka_12m ? `${data.region_gielda_stawka_12m}€/km` : '-';
+                
+                document.getElementById('toll-details').textContent = data.szczegoly_oplat || 'Brak szczegółowych informacji';
+                
+                // Aktualizuj link do mapy
+                const mapLink = document.getElementById('map-link');
+                if (data.map_link) {
+                    mapLink.href = data.map_link;
+                } else {
+                    mapLink.href = `https://www.google.com/maps/dir/${coordFrom}/${coordTo}`;
+                }
+                
+                // Aktualizuj listę krajów
+                const countriesList = document.getElementById('countries-list');
+                if (data.kraje && data.kraje.length > 0) {
+                    countriesList.innerHTML = data.kraje.map(country => 
+                        `<span class="badge bg-light text-dark p-2 me-2 mb-2" style="display: inline-block; background-color: #f8f9fa; border: 1px solid #ddd; border-radius: 4px;">${country}</span>`
+                    ).join('');
+                } else {
+                    countriesList.textContent = 'Brak informacji o krajach na trasie';
+                }
+            })
+            .catch(error => {
+                loadingContainer.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-triangle"></i> Wystąpił błąd podczas obliczania trasy: ${error.message}
+                    </div>
+                `;
+            });
+    });
+</script>
 {% endblock %}

@@ -4,9 +4,10 @@ import time
 from datetime import datetime, timedelta
 import requests
 import logging
+import traceback
 
-# Konfiguracja loggera - zmiana poziomu na WARNING aby ograniczyć logi
-logging.basicConfig(level=logging.WARNING)
+# Konfiguracja loggera - zmiana poziomu na DEBUG aby pokazać wszystkie logi
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 class PTVRequestQueue:
@@ -109,12 +110,9 @@ class PTVRouteManager:
         self.cache_manager = RouteCacheManager(cache_duration)
 
     def get_routes_batch(self, routes, avoid_switzerland=False, routing_mode="FAST"):
-        """
-        Przetwarza wiele tras w jednym wywołaniu
-        routes: lista tupli (coord_from, coord_to)
-        """
+        """Przetwarza wiele tras w jednym wywołaniu"""
         results = {}
-        batch_size = 5  # Maksymalna liczba tras w jednym batch'u
+        batch_size = 5
         
         for i in range(0, len(routes), batch_size):
             batch = routes[i:i + batch_size]
@@ -126,32 +124,47 @@ class PTVRouteManager:
             headers = {"apiKey": self.api_key}
             params = {
                 "waypoints": waypoints,
-                "results": "TOLL_COSTS,DISTANCE,POLYLINE",
+                "results": "TOLL_COSTS,DISTANCE,POLYLINE,TOLL_SECTIONS,TOLL_SYSTEMS",
                 "options[routingMode]": routing_mode,
                 "options[trafficMode]": "AVERAGE"
             }
             
             if avoid_switzerland:
                 params["options[prohibitedCountries]"] = "CH"
-                
+            
             try:
                 response = requests.post(base_url, json=params, headers=headers, timeout=40)
+                
                 if response.status_code == 200:
                     data = response.json()
                     for idx, route_data in enumerate(data['routes']):
                         route_key = batch[idx]
                         distance_km = route_data['distance'] / 1000
-                        polyline = route_data.get('polyline', '')
-                        results[route_key] = {'distance': distance_km, 'polyline': polyline}
+                        
+                        # Przetwarzanie opłat drogowych
+                        toll_info = self.process_toll_costs(route_data.get('toll', {}))
+                        
+                        result = {
+                            'distance': distance_km,
+                            'polyline': route_data.get('polyline', ''),
+                            'toll_cost': toll_info['total_cost'],
+                            'road_toll': toll_info['costs_by_type']['ROAD']['EUR'],
+                            'other_toll': (toll_info['costs_by_type']['TUNNEL']['EUR'] +
+                                         toll_info['costs_by_type']['BRIDGE']['EUR'] +
+                                         toll_info['costs_by_type']['FERRY']['EUR']),
+                            'toll_details': toll_info['total_cost_by_country']
+                        }
+                        
+                        results[route_key] = result
                         # Zapisz w cache
                         coord_from, coord_to = batch[idx]
-                        self.cache_manager.set(coord_from, coord_to, {'distance': distance_km, 'polyline': polyline}, 
-                                            avoid_switzerland, routing_mode)
+                        self.cache_manager.set(coord_from, coord_to, result, avoid_switzerland, routing_mode)
                 else:
-                    pass
+                    logger.warning(f"Błąd API PTV batch: {response.status_code}")
+                    
             except Exception as e:
-                pass
-                
+                logger.warning(f"Wyjątek podczas pobierania tras batch: {str(e)}")
+        
         return results
 
     def get_route_distance(self, coord_from, coord_to, avoid_switzerland=False, routing_mode="FAST"):
@@ -170,7 +183,7 @@ class PTVRouteManager:
             params = [
                 ("waypoints", f"{coord_from[0]},{coord_from[1]}"),
                 ("waypoints", f"{coord_to[0]},{coord_to[1]}"),
-                ("results", "LEGS,POLYLINE,TOLL_COSTS"),
+                ("results", "LEGS,POLYLINE,TOLL_COSTS,TOLL_SECTIONS,TOLL_SYSTEMS"),
                 ("options[routingMode]", routing_mode),
                 ("options[trafficMode]", "AVERAGE")
             ]
@@ -178,65 +191,178 @@ class PTVRouteManager:
             if avoid_switzerland:
                 params.append(("options[prohibitedCountries]", "CH"))
 
-            try:
-                response = requests.get(base_url, params=params, headers=headers, timeout=40)
-                
-                if response.status_code == 200:
-                    data = response.json()
+            max_retries = 3
+            retry_delay = 2  # sekundy między próbami
+            
+            # Log parametrów zapytania
+            logger.info(f"""
+=== Rozpoczynam zapytanie do PTV API ===
+URL: {base_url}
+Trasa: {coord_from} -> {coord_to}
+Parametry:
+- Unikanie Szwajcarii: {avoid_switzerland}
+- Tryb routingu: {routing_mode}
+- Timeout połączenia: 5s
+- Timeout odczytu: 35s
+""")
+            
+            for attempt in range(max_retries):
+                start_time = time.time()
+                try:
+                    logger.info(f"Próba {attempt + 1}/{max_retries} - Start")
                     
-                    # Pobierz dystans z sekcji legs
-                    distance = None
-                    if 'legs' in data and isinstance(data['legs'], list):
-                        distance = sum(leg.get('distance', 0) for leg in data['legs'])
+                    # Rozdzielamy timeout na połączenie (5s) i odczyt (35s)
+                    response = requests.get(base_url, params=params, headers=headers, 
+                                         timeout=(5, 35))
                     
-                    polyline = data.get('polyline', '')
+                    request_time = time.time() - start_time
+                    logger.info(f"Czas odpowiedzi: {request_time:.2f}s")
                     
-                    # Pobierz opłaty drogowe
-                    toll = data.get("toll", {}).get("costs", {})
-                    total_toll = toll.get("convertedPrice", {}).get("price")
-                    
-                    # Wyświetl szczegółowe informacje o opłatach drogowych
-                    print(f"\n[TOLL] Wywołanie kosztów drogowych dla: {coord_from} -> {coord_to}")
-                    print(f"[TOLL] SUMA EUR: {total_toll}")
-
-                    # Rozbicie na kraje: długość i koszt
-                    countries = toll.get("countries", [])
-                    if countries:
-                        print("[TOLL] Rozbicie na kraje (długość trasy oraz koszt w EUR):")
-                        for kraj in countries:
-                            code = kraj.get("countryCode")
-                            converted = kraj.get("convertedPrice", {}).get("price")
-                            distance_m = kraj.get("distance") or kraj.get("length") or kraj.get("segmentLength")
-                            distance_km = round(distance_m / 1000, 1) if distance_m is not None else "?"
-                            print(f"    {code}: {distance_km} km / {converted} EUR")
-                    
-                    if distance is not None:
-                        result = {
-                            'distance': distance / 1000, 
-                            'polyline': polyline,
-                            'toll_cost': total_toll
-                        }
-                        # Dodaj szczegółowe informacje o opłatach drogowych
-                        toll_details = {}
-                        for kraj in toll.get("countries", []):
-                            code = kraj.get("countryCode")
-                            converted = kraj.get("convertedPrice", {}).get("price")
-                            if code and converted:
-                                toll_details[code] = converted
-                        result['toll_details'] = toll_details
+                    if response.status_code == 200:
+                        logger.info(f"Sukces - Otrzymano odpowiedź 200 OK w {request_time:.2f}s")
+                        data = response.json()
                         
-                        # Zapisz w cache
-                        self.cache_manager.set(coord_from, coord_to, result, avoid_switzerland, routing_mode)
-                        return result
+                        # Przetwarzanie kosztów
+                        if 'toll' in data:
+                            toll_info = self.process_toll_costs(data['toll'])
+                        
+                        distance = None
+                        if 'legs' in data and isinstance(data['legs'], list):
+                            distance = sum(leg.get('distance', 0) for leg in data['legs'])
+                            logger.info(f"Obliczony dystans: {distance/1000:.2f}km")
+                        
+                        if distance is not None:
+                            result = {
+                                'distance': distance / 1000,
+                                'polyline': data.get('polyline', ''),
+                                'toll_cost': toll_info['total_cost'],
+                                'road_toll': toll_info['costs_by_type']['ROAD']['EUR'],
+                                'other_toll': (toll_info['costs_by_type']['TUNNEL']['EUR'] +
+                                             toll_info['costs_by_type']['BRIDGE']['EUR'] +
+                                             toll_info['costs_by_type']['FERRY']['EUR']),
+                                'toll_details': toll_info['total_cost_by_country']
+                            }
+                            
+                            # Zapisz w cache
+                            self.cache_manager.set(coord_from, coord_to, result, avoid_switzerland, routing_mode)
+                            logger.info("=== Zakończono zapytanie z sukcesem ===")
+                            return result
+                        else:
+                            logger.warning(f"Brak danych o dystansie w odpowiedzi API dla trasy {coord_from} -> {coord_to}")
+                            return None
+                    elif response.status_code == 400 and avoid_switzerland:
+                        logger.info(f"""
+=== Otrzymano błąd 400 z avoid_switzerland=True ===
+Czas odpowiedzi: {request_time:.2f}s
+Próbuję bez unikania Szwajcarii...
+""")
+                        
+                        # Usuń parametr avoid_switzerland
+                        retry_params = [p for p in params if p[0] != "options[prohibitedCountries]"]
+                        
+                        # Spróbuj ponownie
+                        retry_start_time = time.time()
+                        retry_response = requests.get(base_url, params=retry_params, headers=headers, 
+                                                   timeout=(5, 35))
+                        retry_time = time.time() - retry_start_time
+                        
+                        logger.info(f"Czas odpowiedzi bez unikania Szwajcarii: {retry_time:.2f}s")
+                        
+                        if retry_response.status_code == 200:
+                            retry_data = retry_response.json()
+                            if 'toll' in retry_data:
+                                toll_info = self.process_toll_costs(retry_data['toll'])
+                            
+                            distance = None
+                            if 'legs' in retry_data and isinstance(retry_data['legs'], list):
+                                distance = sum(leg.get('distance', 0) for leg in retry_data['legs'])
+                                logger.info(f"Obliczony dystans (bez unikania CH): {distance/1000:.2f}km")
+                            
+                            if distance is not None:
+                                result = {
+                                    'distance': distance / 1000,
+                                    'polyline': retry_data.get('polyline', ''),
+                                    'toll_cost': toll_info['total_cost'],
+                                    'road_toll': toll_info['costs_by_type']['ROAD']['EUR'],
+                                    'other_toll': (toll_info['costs_by_type']['TUNNEL']['EUR'] +
+                                                 toll_info['costs_by_type']['BRIDGE']['EUR'] +
+                                                 toll_info['costs_by_type']['FERRY']['EUR']),
+                                    'toll_details': toll_info['total_cost_by_country']
+                                }
+                                
+                                # Zapisz w cache z avoid_switzerland=False
+                                self.cache_manager.set(coord_from, coord_to, result, False, routing_mode)
+                                logger.info("=== Zakończono zapytanie z sukcesem (bez unikania CH) ===")
+                                return result
+                        else:
+                            logger.warning(f"""
+=== Błąd przy próbie bez unikania Szwajcarii ===
+Kod odpowiedzi: {retry_response.status_code}
+Czas odpowiedzi: {retry_time:.2f}s
+""")
+                            return None
                     else:
-                        logger.warning(f"Brak danych o dystansie w odpowiedzi API dla trasy {coord_from} -> {coord_to}")
+                        error_details = "Brak szczegółów błędu"
+                        try:
+                            error_details = response.json()
+                        except:
+                            try:
+                                error_details = response.text
+                            except:
+                                pass
+                        
+                        logger.warning(f"""
+=== Błąd API PTV ===
+Kod odpowiedzi: {response.status_code}
+Czas odpowiedzi: {request_time:.2f}s
+Trasa: {coord_from} -> {coord_to}
+Szczegóły: {error_details}
+""")
+                        # Nie zwracamy None tutaj - pozwalamy na ponowną próbę
+                except (requests.exceptions.Timeout, requests.exceptions.ReadTimeout) as e:
+                    request_time = time.time() - start_time
+                    if attempt < max_retries - 1:
+                        logger.warning(f"""
+=== Timeout podczas próby {attempt + 1}/{max_retries} ===
+Typ timeoutu: {type(e).__name__}
+Czas do timeoutu: {request_time:.2f}s
+Trasa: {coord_from} -> {coord_to}
+Szczegóły błędu: {str(e)}
+Ponawiam za {retry_delay}s...
+""")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        logger.error(f"""
+=== Wszystkie próby zakończone timeoutem ===
+Ostatni timeout: {type(e).__name__}
+Czas do timeoutu: {request_time:.2f}s
+Trasa: {coord_from} -> {coord_to}
+Szczegóły ostatniego błędu: {str(e)}
+""")
                         return None
-                else:
-                    logger.warning(f"Błąd API PTV: {response.status_code} dla trasy {coord_from} -> {coord_to}")
+                except Exception as e:
+                    request_time = time.time() - start_time
+                    logger.error(f"""
+=== Nieoczekiwany błąd podczas próby {attempt + 1}/{max_retries} ===
+Typ błędu: {type(e).__name__}
+Czas do błędu: {request_time:.2f}s
+Trasa: {coord_from} -> {coord_to}
+Szczegóły błędu: {str(e)}
+Stack trace:
+{traceback.format_exc()}
+""")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
                     return None
-            except Exception as e:
-                logger.warning(f"Wyjątek podczas pobierania trasy {coord_from} -> {coord_to}: {str(e)}")
-                return None
+            
+            logger.error(f"""
+=== Wszystkie próby nieudane ===
+Trasa: {coord_from} -> {coord_to}
+Parametry: {params}
+""")
+            return None  # Jeśli wszystkie próby się nie powiodły
 
         # Dodaj request do kolejki
         self.request_queue.add_request(request_id, _make_request)
@@ -257,4 +383,252 @@ class PTVRouteManager:
         return None
 
     def get_stats(self):
-        return self.cache_manager.get_stats() 
+        return self.cache_manager.get_stats()
+
+    def separate_toll_costs_by_type(self, toll_data):
+        """Separates toll costs by type (road, tunnel, bridge, ferry)"""
+        result = {
+            'ROAD': {'EUR': 0.0},  # standardowe opłaty drogowe
+            'TUNNEL': {'EUR': 0.0},  # tunele
+            'BRIDGE': {'EUR': 0.0},  # mosty
+            'FERRY': {'EUR': 0.0},   # promy
+        }
+        
+        if not toll_data or 'sections' not in toll_data:
+            return result
+        
+        for section in toll_data['sections']:
+            toll_type = section.get('tollRoadType', 'GENERAL')
+            # Mapowanie GENERAL na ROAD dla lepszej czytelności
+            if toll_type == 'GENERAL':
+                toll_type = 'ROAD'
+            
+            for cost in section.get('costs', []):
+                currency = cost.get('currency', 'EUR')
+                price = cost.get('price', 0.0)
+                
+                # Inicjalizacja słownika dla nowej waluty jeśli potrzebne
+                if currency not in result[toll_type]:
+                    result[toll_type][currency] = 0.0
+                
+                result[toll_type][currency] += price
+                
+                # Jeśli mamy przeliczoną cenę w EUR, dodajemy ją też
+                converted_price = cost.get('convertedPrice', {}).get('price', 0.0)
+                if converted_price and currency != 'EUR':
+                    result[toll_type]['EUR'] += converted_price
+        
+        return result
+
+    def process_toll_costs(self, toll_data):
+        """Process toll costs from API response"""
+        result = {
+            'total_cost': 0,
+            'total_cost_by_country': {},
+            'costs_by_type': {
+                'ROAD': {'EUR': 0},
+                'TUNNEL': {'EUR': 0},
+                'BRIDGE': {'EUR': 0},
+                'FERRY': {'EUR': 0}
+            }
+        }
+        
+        if not toll_data:
+            return result
+
+        # Pobierz całkowity koszt i koszty według krajów
+        if 'costs' in toll_data:
+            total_cost = toll_data['costs'].get('convertedPrice', {}).get('price', 0)
+            result['total_cost'] = total_cost
+            
+            # Koszty według krajów
+            for country in toll_data['costs'].get('countries', []):
+                code = country.get('countryCode')
+                cost = country.get('convertedPrice', {}).get('price', 0)
+                if code and cost is not None:
+                    result['total_cost_by_country'][code] = cost
+
+        # Analiza sekcji dla klasyfikacji kosztów
+        road_toll = 0
+        tunnel_toll = 0
+        bridge_toll = 0
+        ferry_toll = 0
+
+        # Najpierw sprawdź sekcje
+        for section in toll_data.get('sections', []):
+            section_cost = section.get('costs', [{}])[0].get('convertedPrice', {}).get('price', 0)
+            section_type = section.get('tollRoadType', '').upper()
+            
+            if section_type == 'TUNNEL':
+                tunnel_toll += section_cost
+            elif section_type == 'BRIDGE':
+                bridge_toll += section_cost
+            elif section_type == 'FERRY':
+                ferry_toll += section_cost
+            else:
+                road_toll += section_cost
+
+        # Jeśli nie znaleziono kosztów w sekcjach, spróbuj z systemów
+        if (road_toll + tunnel_toll + bridge_toll + ferry_toll) == 0:
+            for system in toll_data.get('systems', []):
+                system_cost = system.get('costs', {}).get('convertedPrice', {}).get('price', 0)
+                system_name = system.get('name', '').upper()
+                system_type = system.get('type', '').upper()
+                operator_name = system.get('operatorName', '').upper()
+
+                # Logowanie szczegółów systemu
+                logging.debug(f"System: {system_name}, Operator: {operator_name}, "
+                            f"Taryfa: {system.get('tariffVersion')} (od {system.get('tariffVersionValidFrom')})")
+
+                # Klasyfikacja na podstawie nazwy systemu i typu
+                if 'TUNNEL' in system_name or 'TUNNEL' in system_type:
+                    tunnel_toll += system_cost
+                elif 'BRIDGE' in system_name or 'BRIDGE' in system_type:
+                    bridge_toll += system_cost
+                elif 'FERRY' in system_name or 'FERRY' in system_type:
+                    ferry_toll += system_cost
+                elif system_type in ["DISTANCE_BASED", "TIME_BASED", "SECTION_BASED"]:
+                    road_toll += system_cost
+                else:
+                    # Jeśli typ nie jest znany, sprawdź znane systemy
+                    if 'MONT-BLANC' in system_name or 'MONT BLANC' in system_name:
+                        tunnel_toll += system_cost
+                    else:
+                        road_toll += system_cost
+
+        # Jeśli wciąż nie mamy kosztów, ale mamy całkowity koszt, spróbuj oszacować
+        if (road_toll + tunnel_toll + bridge_toll + ferry_toll) == 0 and total_cost > 0:
+            # Sprawdź znane systemy w danych
+            for system in toll_data.get('systems', []):
+                system_name = system.get('name', '').upper()
+                if 'MONT-BLANC' in system_name or 'MONT BLANC' in system_name:
+                    tunnel_toll = 333.42  # Znana stała cena za tunel Mont Blanc
+                    road_toll = total_cost - tunnel_toll
+                    break
+            else:
+                # Jeśli nie znaleziono znanych systemów, wszystko idzie do opłat drogowych
+                road_toll = total_cost
+
+        # Zapisz wyniki
+        result['costs_by_type']['ROAD']['EUR'] = road_toll
+        result['costs_by_type']['TUNNEL']['EUR'] = tunnel_toll
+        result['costs_by_type']['BRIDGE']['EUR'] = bridge_toll
+        result['costs_by_type']['FERRY']['EUR'] = ferry_toll
+        
+        return result
+
+    def get_excel_formats(self, workbook):
+        """Get Excel formats for different cell types"""
+        formats = {
+            'header': workbook.add_format({
+                'bold': True,
+                'align': 'center',
+                'valign': 'vcenter',
+                'bg_color': '#D9D9D9'
+            }),
+            'number': workbook.add_format({
+                'num_format': '0.00',
+                'align': 'right'
+            }),
+            'cost': workbook.add_format({
+                'num_format': '0.00 €',
+                'align': 'right'
+            }),
+            'zero_cost': workbook.add_format({
+                'num_format': '0.00 €',
+                'align': 'right',
+                'color': '#808080'  # szary kolor dla zerowych kosztów
+            })
+        }
+        return formats
+
+    def prepare_excel_header(self, worksheet, include_toll_costs=True):
+        """Prepare Excel header with new cost breakdown columns"""
+        formats = self.get_excel_formats(worksheet.book)
+        headers = ['ID', 'Dystans [km]', 'Czas [h]']
+        
+        if include_toll_costs:
+            headers.extend([
+                'Opłaty drogowe [EUR]',
+                'Koszt/km [EUR]',
+                'Dodatkowe opłaty [EUR]',
+                'w tym - Tunele [EUR]',
+                'w tym - Mosty [EUR]',
+                'w tym - Promy [EUR]',
+                'Suma kosztów [EUR]'
+            ])
+        
+        for col, header in enumerate(headers):
+            worksheet.write(0, col, header, formats['header'])
+            worksheet.set_column(col, col, len(header) + 2)
+        
+        return worksheet
+
+    def process_route_result(self, route_result, worksheet, row, include_toll_costs=True):
+        """Process single route result and write to worksheet"""
+        if not route_result or 'error' in route_result:
+            return row
+
+        # Existing distance and time calculations
+        distance = route_result.get('distance', 0) / 1000  # km
+        travel_time = route_result.get('travelTime', 0) / 3600  # hours
+
+        # Process toll costs with new breakdown
+        toll_info = self.process_toll_costs(route_result.get('toll', {}))
+        total_cost = toll_info['total_cost']
+        costs_by_type = toll_info['costs_by_type']
+        
+        # Rozdzielenie kosztów
+        road_cost = costs_by_type['ROAD']['EUR']
+        tunnel_cost = costs_by_type['TUNNEL']['EUR']
+        bridge_cost = costs_by_type['BRIDGE']['EUR']
+        ferry_cost = costs_by_type['FERRY']['EUR']
+        
+        # Suma kosztów specjalnych
+        special_costs = tunnel_cost + bridge_cost + ferry_cost
+        
+        # Obliczenie kosztu na km (tylko z opłat drogowych)
+        cost_per_km = road_cost / distance if distance > 0 else 0
+
+        # Update Excel columns
+        formats = self.get_excel_formats(worksheet.book)
+        col = 0
+        
+        # ID
+        worksheet.write(row, col, row)
+        col += 1
+        
+        # Dystans
+        worksheet.write(row, col, distance, formats['number'])
+        col += 1
+        
+        # Czas
+        worksheet.write(row, col, travel_time, formats['number'])
+        col += 1
+        
+        if include_toll_costs:
+            # Opłaty drogowe
+            worksheet.write(row, col, road_cost, formats['cost'])
+            col += 1
+            
+            # Koszt na km (tylko z opłat drogowych)
+            worksheet.write(row, col, cost_per_km, formats['cost'])
+            col += 1
+            
+            # Dodatkowe opłaty (suma tuneli, mostów, promów)
+            worksheet.write(row, col, special_costs, formats['cost'])
+            col += 1
+            
+            # Szczegóły dodatkowych opłat
+            worksheet.write(row, col, tunnel_cost, formats['cost'])
+            col += 1
+            worksheet.write(row, col, bridge_cost, formats['cost'])
+            col += 1
+            worksheet.write(row, col, ferry_cost, formats['cost'])
+            col += 1
+            
+            # Suma wszystkich kosztów
+            worksheet.write(row, col, total_cost, formats['cost'])
+            col += 1
+
+        return row + 1 

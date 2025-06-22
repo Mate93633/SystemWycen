@@ -1,33 +1,126 @@
 {% extends "base.html" %}
 
-{% block title %}Test trasy{% endblock %}
+{% block title %}Test pojedynczej trasy{% endblock %}
 
 {% block content %}
-    <h1>Test trasy</h1>
+<div class="card">
+    <div class="card-header">
+        <div>
+            <i class="fas fa-route"></i> Wycena pojedynczej trasy
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="alert alert-info">
+            <i class="fas fa-info-circle"></i> Wprowadź dane dla jednej trasy, aby przetestować wyliczenie dystansu i kosztów.
+        </div>
+
+        <form method="post" action="/test_route_form">
+            <div class="d-flex">
+                <div style="flex: 1; margin-right: 15px;">
+                    <h5 class="mb-3">Punkt załadunku</h5>
+                    
+                    <div class="form-group">
+                        <label for="load_country" class="form-label">Kraj załadunku:</label>
+                        <input type="text" id="load_country" name="load_country" class="form-control" required placeholder="np. PL, DE, FR">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="load_postal" class="form-label">Kod pocztowy załadunku:</label>
+                        <input type="text" id="load_postal" name="load_postal" class="form-control" required placeholder="np. 00-001">
+                    </div>
+                </div>
+                
+                <div style="flex: 1;">
+                    <h5 class="mb-3">Punkt rozładunku</h5>
+                    
+                    <div class="form-group">
+                        <label for="unload_country" class="form-label">Kraj rozładunku:</label>
+                        <input type="text" id="unload_country" name="unload_country" class="form-control" required placeholder="np. PL, DE, FR">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="unload_postal" class="form-label">Kod pocztowy rozładunku:</label>
+                        <input type="text" id="unload_postal" name="unload_postal" class="form-control" required placeholder="np. 00-001">
+                    </div>
+                </div>
+            </div>
+            
+            <button type="submit" class="btn btn-primary mt-3">
+                <i class="fas fa-calculator"></i> Oblicz trasę
+            </button>
+        </form>
+    </div>
+</div>
+
+<div class="card mt-3">
+    <div class="card-header">
+        <i class="fas fa-info-circle"></i> Dostępne kody krajów
+    </div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-4">
+                <ul class="list-unstyled">
+                    <li><strong>PL</strong> - Polska</li>
+                    <li><strong>DE</strong> - Niemcy</li>
+                    <li><strong>FR</strong> - Francja</li>
+                    <li><strong>IT</strong> - Włochy</li>
+                    <li><strong>ES</strong> - Hiszpania</li>
+                </ul>
+            </div>
+            <div class="col-md-4">
+                <ul class="list-unstyled">
+                    <li><strong>NL</strong> - Holandia</li>
+                    <li><strong>BE</strong> - Belgia</li>
+                    <li><strong>CZ</strong> - Czechy</li>
+                    <li><strong>AT</strong> - Austria</li>
+                    <li><strong>SK</strong> - Słowacja</li>
+                </ul>
+            </div>
+            <div class="col-md-4">
+                <ul class="list-unstyled">
+                    <li><strong>SI</strong> - Słowenia</li>
+                    <li><strong>HU</strong> - Węgry</li>
+                    <li><strong>CH</strong> - Szwajcaria</li>
+                    <li><strong>GB</strong> - Wielka Brytania</li>
+                    <li><strong>DK</strong> - Dania</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+    .list-unstyled {
+        list-style: none;
+        padding-left: 0;
+    }
     
-    <form method="post" class="form">
-        <div class="form-group">
-            <label for="load_country">Kraj załadunku:</label>
-            <input type="text" id="load_country" name="load_country" placeholder="PL" required>
-        </div>
-        
-        <div class="form-group">
-            <label for="load_postal">Kod pocztowy załadunku:</label>
-            <input type="text" id="load_postal" name="load_postal" placeholder="00-000" required>
-        </div>
-        
-        <div class="form-group">
-            <label for="unload_country">Kraj rozładunku:</label>
-            <input type="text" id="unload_country" name="unload_country" placeholder="DE" required>
-        </div>
-        
-        <div class="form-group">
-            <label for="unload_postal">Kod pocztowy rozładunku:</label>
-            <input type="text" id="unload_postal" name="unload_postal" placeholder="00000" required>
-        </div>
-        
-        <div class="form-group">
-            <button type="submit">Sprawdź trasę</button>
-        </div>
-    </form>
+    .list-unstyled li {
+        margin-bottom: 8px;
+    }
+    
+    .row {
+        display: flex;
+        flex-wrap: wrap;
+        margin-right: -15px;
+        margin-left: -15px;
+    }
+    
+    .col-md-4 {
+        flex: 0 0 33.333333%;
+        max-width: 33.333333%;
+        padding-right: 15px;
+        padding-left: 15px;
+    }
+    
+    @media (max-width: 768px) {
+        .col-md-4 {
+            flex: 0 0 100%;
+            max-width: 100%;
+            margin-bottom: 15px;
+        }
+    }
+</style>
 {% endblock %}

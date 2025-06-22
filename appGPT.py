@@ -7,7 +7,8 @@ from flask import (
     render_template_string, 
     render_template,
     redirect,
-    url_for
+    url_for,
+    session
 )
 import io
 import time
@@ -29,6 +30,10 @@ import unicodedata
 from rapidfuzz import process, fuzz
 import csv
 from ptv_api_manager import PTVRouteManager
+import openpyxl
+
+# Blokada dla bezpiecznej aktualizacji zmiennych globalnych
+progress_lock = threading.Lock()
 
 # Globalny słownik lookup
 LOOKUP_DICT = {}
@@ -36,13 +41,36 @@ LOOKUP_DICT = {}
 # Nowa zmienna globalna - słownik mapujący (kod kraju, kod pocztowy) -> region
 REGION_MAPPING = {}
 
+# Słownik kodów ISO krajów
+ISO_CODES = {
+    "Poland": "pl",
+    "Germany": "de",
+    "France": "fr",
+    "Italy": "it",
+    "Spain": "es",
+    "Netherlands": "nl",
+    "Belgium": "be",
+    "Czech Republic": "cz",
+    "Austria": "at",
+    "Slovakia": "sk",
+    "Slovenia": "si",
+    "Hungary": "hu",
+    "Portugal": "pt",
+    "Greece": "gr",
+    "Switzerland": "ch",
+    "Sweden": "se",
+    "Finland": "fi",
+    "Norway": "no",
+    "Denmark": "dk"
+}
+
 # Globalne zmienne
 PTV_API_KEY = "RVVfZmQ1YTcyY2E4ZjNiNDhmOTlhYjE5NjRmNGZhYTdlNTc6NGUyM2VhMmEtZTc2YS00YmVkLWIyMTMtZDc2YjE0NWZjZjE1"
 DEFAULT_ROUTING_MODE = "FAST"  # Stały tryb wyznaczania trasy
 
-# Konfiguracja loggera - zmiana poziomu na WARNING aby ograniczyć logi
+# Konfiguracja loggera - zmiana poziomu na ERROR aby ograniczyć logi
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.ERROR,  # Zmieniono z INFO na ERROR
     format='%(message)s',  # Uproszczony format bez timestampów
     handlers=[
         logging.FileHandler('app.log'),
@@ -51,6 +79,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Wyłączenie debugowych logów urllib3
+logging.getLogger('urllib3').setLevel(logging.ERROR)
+
 # Filtr dla logów postępu
 class FilterProgress(logging.Filter):
     def filter(self, record):
@@ -58,9 +89,9 @@ class FilterProgress(logging.Filter):
 
 logger.addFilter(FilterProgress())
 
-# Ustawienie poziomu INFO dla logów związanych z punktami trasy
+# Ustawienie poziomu ERROR dla logów związanych z punktami trasy
 route_logger = logging.getLogger(__name__ + '.route')
-route_logger.setLevel(logging.INFO)
+route_logger.setLevel(logging.ERROR)
 route_logger.handlers = []  # Usuwamy domyślne handlery
 route_logger.addHandler(logging.StreamHandler())
 route_logger.propagate = False  # Zapobiegamy propagacji logów do rodzica
@@ -80,12 +111,10 @@ PROGRESS = 0
 RESULT_EXCEL = None
 CURRENT_ROW = 0
 TOTAL_ROWS = 0
+PROCESSING_COMPLETE = False  # Dodaję tę zmienną
 
 GEOCODING_TOTAL = 0
 LOCATIONS_TO_VERIFY = []
-VERIFICATION_IN_PROGRESS = False
-FILE_TO_PROCESS = None
-PROCESSING_PARAMS = {}
 GEOCODING_CURRENT = 0
 
 # Dane do podglądu w tabeli
@@ -96,15 +125,18 @@ PREVIEW_DATA = {
         'Kraj rozładunku',
         'Kod pocztowy rozładunku',
         'Dystans (km)',
+        'Podlot (km)',  # Ta kolumna już istnieje
         'Koszt paliwa',
-        'Koszt kierowcy',
-        'Opłaty drogowe (szczegóły)',
-        'Suma opłat drogowych',
+        'Opłaty drogowe',
+        'Koszt kierowcy + leasing',
         'Opłaty/km',
+        'Opłaty drogowe (szczegóły)',
         'Suma kosztów',
-        'Link do mapy'
+        'Link do mapy',
+        'Sugerowany fracht'
     ],
-    'rows': []
+    'rows': [],
+    'total_count': 0
 }
 
 # Mapowanie krajów – ujednolicone nazwy
@@ -255,9 +287,9 @@ def load_region_mapping():
 ('97', 'AT', 'AT WSCHÓD'),
 ('98', 'AT', 'AT WSCHÓD'),
 ('99', 'AT', 'AT WSCHÓD'),
-(NULL, 'BE', 'BE'),
-(NULL, 'BG', 'BG'),
-(NULL, 'CH', 'CH'),
+('', 'BE', 'BE'),
+('', 'BG', 'BG'),
+('', 'CH', 'CH'),
 ('10', 'CZ', 'CZ PÓŁNOC'),
 ('11', 'CZ', 'CZ PÓŁNOC'),
 ('12', 'CZ', 'CZ PÓŁNOC'),
@@ -427,8 +459,8 @@ def load_region_mapping():
 ('97', 'DE', 'DE9 PÓŁNOC'),
 ('98', 'DE', 'DE9 PÓŁNOC'),
 ('99', 'DE', 'DE9 PÓŁNOC'),
-(NULL, 'DK', 'DK'),
-(NULL, 'EE', 'EE'),
+('', 'DK', 'DK'),
+('', 'EE', 'EE'),
 ('01', 'ES', 'ES PÓŁNOC'),
 ('02', 'ES', 'ES CENTRUM'),
 ('03', 'ES', 'ES POŁUDNIE'),
@@ -479,7 +511,7 @@ def load_region_mapping():
 ('49', 'ES', 'ES POŁUDNIE'),
 ('50', 'ES', 'ES PÓŁNOC'),
 ('52', 'ES', 'ES POŁUDNIE'),
-(NULL, 'FI', 'FI'),
+('', 'FI', 'FI'),
 ('01', 'FR', 'FR WSCHÓD'),
 ('02', 'FR', 'FR PÓŁNOC'),
 ('03', 'FR', 'FR WSCHÓD'),
@@ -709,10 +741,10 @@ def load_region_mapping():
 ('WS', 'GB', 'GB CENTRUM'),
 ('WV', 'GB', 'GB CENTRUM'),
 ('YO', 'GB', 'GB CENTRUM'),
-(NULL, 'GR', 'GR'),
-(NULL, 'HR', 'HR'),
-(NULL, 'HU', 'HU'),
-(NULL, 'IE', 'IE'),
+('', 'GR', 'GR'),
+('', 'HR', 'HR'),
+('', 'HU', 'HU'),
+('', 'IE', 'IE'),
 ('0', 'IT', 'IT CENTRUM'),
 ('1', 'IT', 'IT CENTRUM'),
 ('2', 'IT', 'IT PÓŁNOC'),
@@ -723,10 +755,10 @@ def load_region_mapping():
 ('7', 'IT', 'IT POŁUDNIE'),
 ('8', 'IT', 'IT POŁUDNIE'),
 ('9', 'IT', 'IT POŁUDNIE'),
-(NULL, 'LI', 'LI'),
-(NULL, 'LU', 'LU'),
-(NULL, 'MC', 'FR POŁUDNIE'),
-(NULL, 'NL', 'NL'),
+('', 'LI', 'LI'),
+('', 'LU', 'LU'),
+('', 'MC', 'FR POŁUDNIE'),
+('', 'NL', 'NL'),
 ('0', 'PL', 'PL WSCHÓD'),
 ('1', 'PL', 'PL WSCHÓD'),
 ('2', 'PL', 'PL WSCHÓD'),
@@ -737,9 +769,9 @@ def load_region_mapping():
 ('7', 'PL', 'PL ZACHÓD'),
 ('8', 'PL', 'PL WSCHÓD'),
 ('9', 'PL', 'PL WSCHÓD'),
-(NULL, 'PT', 'PT'),
-(NULL, 'RO', 'RO'),
-(NULL, 'SE', 'SE'),
+('', 'PT', 'PT'),
+('', 'RO', 'RO'),
+('', 'SE', 'SE'),
 ('1', 'SI', 'SI ZACHÓD'),
 ('2', 'SI', 'SI WSCHÓD'),
 ('3', 'SI', 'SI WSCHÓD'),
@@ -749,7 +781,7 @@ def load_region_mapping():
 ('7', 'SI', 'SI WSCHÓD'),
 ('8', 'SI', 'SI WSCHÓD'),
 ('9', 'SI', 'SI WSCHÓD'),
-(NULL, 'SK', 'SK'),
+('', 'SK', 'SK'),
 ('M1', 'GB', 'GB CENTRUM'),
 ('L1', 'GB', 'GB CENTRUM'),
 ('L4', 'GB', 'GB CENTRUM'),
@@ -813,7 +845,9 @@ def get_region_based_rates(lc, lp, uc, up):
             'region_klient_stawka_6m': None,
             'region_klient_stawka_12m': None,
             'region_relacja': f"{lc_region or lc} - {uc_region or uc}",
-            'region_dopasowanie': "Brak dopasowania regionalnego"
+            'region_dopasowanie': "Brak dopasowania regionalnego",
+            'region_gielda_dopasowanie': None,
+            'region_klient_dopasowanie': None
         }
 
     try:
@@ -830,7 +864,9 @@ def get_region_based_rates(lc, lp, uc, up):
             'region_klient_stawka_6m': None,
             'region_klient_stawka_12m': None,
             'region_relacja': f"{lc_region} - {uc_region}",
-            'region_dopasowanie': f"Błąd: {e}"
+            'region_dopasowanie': f"Błąd: {e}",
+            'region_gielda_dopasowanie': None,
+            'region_klient_dopasowanie': None
         }
 
     # Dodaj kolumny regionów
@@ -863,7 +899,9 @@ def get_region_based_rates(lc, lp, uc, up):
         'region_klient_stawka_6m': None,
         'region_klient_stawka_12m': None,
         'region_relacja': f"{lc_region} - {uc_region}",
-        'region_dopasowanie': "Brak dopasowań"
+        'region_dopasowanie': "Brak dopasowań",
+        'region_gielda_dopasowanie': None,
+        'region_klient_dopasowanie': None
     }
 
     # --- Klient (historyczne) ---
@@ -874,6 +912,7 @@ def get_region_based_rates(lc, lp, uc, up):
         else:
             total_orders_hist = len(hist_matches)
         result['region_dopasowanie'] = f"Dopasowano {total_orders_hist} zleceń (klient)"
+        result['region_klient_dopasowanie'] = total_orders_hist
 
         # średnie ważone stawek
         for period, col in [('3m', 'stawka_3m'), ('6m', 'stawka_6m'), ('12m', 'stawka_12m')]:
@@ -899,6 +938,7 @@ def get_region_based_rates(lc, lp, uc, up):
             result['region_dopasowanie'] = f"Dopasowano {total_orders_gielda} zleceń (giełda)"
         else:
             result['region_dopasowanie'] += f", {total_orders_gielda} zleceń (giełda)"
+        result['region_gielda_dopasowanie'] = total_orders_gielda
 
         # średnie ważone stawek giełdowych
         for period, col in [('3m', 'stawka_3m'), ('6m', 'stawka_6m'), ('12m', 'stawka_12m')]:
@@ -933,8 +973,15 @@ def load_global_data(filepath):
     #print("Wczytany LOOKUP_DICT:", LOOKUP_DICT)
 
 
+# Flaga do kontroli synchronizacji
+ENABLE_CACHE_SYNC = True  # Synchronizacja tymczasowo wyłączona
+
 def sync_geo_cache_with_lookup():
     """Synchronizuje geo_cache z danymi z LOOKUP_DICT dla spójności."""
+    if not ENABLE_CACHE_SYNC:
+        print("Synchronizacja cache jest tymczasowo wyłączona.")
+        return 0
+        
     print("Synchronizowanie geo_cache z LOOKUP_DICT...")
     synced_count = 0
 
@@ -950,6 +997,7 @@ def sync_geo_cache_with_lookup():
 # Na starcie aplikacji
 load_global_data("global_data.csv")
 sync_geo_cache_with_lookup()  # Synchronizuj cache
+load_region_mapping()  # Wczytaj mapowania regionów
 
 
 def clean_text(text):
@@ -1008,31 +1056,67 @@ def ptv_geocode_by_text(search_text, api_key, language="pl", country_code=None):
     if country_code:
         params["countryFilter"] = country_code.upper()
 
-    print(
-        f"PTV API: Wysyłam zapytanie: '{search_text}'" + (f" z filtrem kraju: {country_code}" if country_code else ""))
+    logger = logging.getLogger("ptv_api_manager")
+    logger.info(f"PTV API: Wysyłam zapytanie: '{search_text}'" + (f" z filtrem kraju: {country_code}" if country_code else ""))
+    
     try:
-        response = requests.get(endpoint, params=params)
-        time.sleep(0.1)
+        # Dodajemy timeout 10 sekund
+        response = requests.get(endpoint, params=params, timeout=10)
+        time.sleep(0.1)  # Rate limiting
+        
         if response.status_code == 200:
             data = response.json()
             if data.get("locations"):
                 result = data["locations"][0]
+                
+                # Sprawdź czy zwrócona lokalizacja jest w odpowiednim kraju
+                if country_code:
+                    returned_country = result.get("address", {}).get("countryCode", "").upper()
+                    if returned_country != country_code.upper():
+                        logger.warning(f"PTV API: Zwrócony kraj ({returned_country}) nie zgadza się z oczekiwanym ({country_code.upper()})")
+                        return (None, None, 'nieznane', 'niezgodny kraj')
+                
+                # Sprawdź czy to zapytanie o kod pocztowy
+                if "," in search_text and search_text.replace(" ", "").split(",")[0].replace("-", "").isdigit():
+                    requested_postal = search_text.split(",")[0].strip()
+                    returned_postal = result["address"].get("postalCode", "").strip()
+                    logger.debug(f"PTV API: Porównuję kody - szukany: '{requested_postal}', zwrócony: '{returned_postal}'")
+                    
+                    # Sprawdź czy pierwsza cyfra się zgadza
+                    requested_first_digit = ''.join(c for c in requested_postal if c.isdigit())[0]
+                    returned_first_digit = ''.join(c for c in returned_postal if c.isdigit())[0]
+                    
+                    if requested_first_digit != returned_first_digit:
+                        logger.warning(f"PTV API: Pierwsza cyfra kodu ({returned_first_digit}) nie zgadza się z szukaną ({requested_first_digit})")
+                        return (None, None, 'nieznane', 'niezgodna pierwsza cyfra kodu')
+                    
+                    # Jeśli zwrócony kod jest inny niż szukany, traktuj jako błąd
+                    if requested_postal != returned_postal:
+                        logger.warning(f"PTV API: Zwrócony kod pocztowy ({returned_postal}) nie zgadza się z szukanym ({requested_postal})")
+                        return (None, None, 'nieznane', 'niezgodny kod pocztowy')
+                
                 lat = result["referencePosition"]["latitude"]
                 lon = result["referencePosition"]["longitude"]
                 quality = result.get("locationType", "PTV_API")
                 source = "PTV API"
-                print(f"PTV API: Znaleziono wynik: {lat}, {lon}")
+                logger.info(f"PTV API: Znaleziono wynik: {lat}, {lon}")
                 return (lat, lon, quality, source)
             else:
-                print(f"PTV API: Brak wyników dla '{search_text}'")
+                logger.warning(f"PTV API: Brak wyników dla '{search_text}'")
                 return (None, None, 'nieznane', 'brak danych')
         else:
-            print("PTV API błąd:", response.status_code, response.text)
-            return (None, None, 'nieznane', 'błąd PTV API')
+            logger.error(f"PTV API błąd: {response.status_code} - {response.text}")
+            return (None, None, 'nieznane', f'błąd PTV API: {response.status_code}')
+    except requests.exceptions.Timeout:
+        logger.warning(f"PTV API: Timeout dla zapytania '{search_text}'")
+        return (None, None, 'nieznane', 'timeout')
     except Exception as e:
-        print("PTV API wyjątek:", e)
+        logger.error(f"PTV API wyjątek: {str(e)} dla zapytania '{search_text}'")
         return (None, None, 'nieznane', str(e))
+
 def get_coordinates(country, postal_code, city=None):
+    global GEOCODING_CURRENT, GEOCODING_TOTAL
+    
     norm_postal = str(postal_code).strip()
     # Upewnij się, że city jest ciągiem znaków – jeśli nie, ustaw pusty ciąg
     if city is None or not hasattr(city, "strip") or city.strip() == "":
@@ -1045,18 +1129,51 @@ def get_coordinates(country, postal_code, city=None):
     print(">>> get_coordinates wywołane dla:", country, norm_postal, city)
 
     norm_country = normalize_country(country)
+    standard_key = f"{norm_country}_{norm_postal}"
+    
+    # Pobierz kod ISO kraju
+    iso_code = ISO_CODES.get(norm_country, "")
+
+
+
+    # Sprawdź czy lokalizacja jest już w cache
+    if standard_key in geo_cache:
+        cached = geo_cache[standard_key]
+        if cached[0] is not None:
+            print(f"Znaleziono wynik w cache dla klucza: {standard_key}: {cached}")
+            return cached
 
     # Różne ścieżki dla dwucyfrowych i nie-dwucyfrowych kodów
     if len(norm_postal) == 2:
-        # DLA KODÓW DWUCYFROWYCH - ZMIENIONA KOLEJNOŚĆ:
-        # PTV API -> Nominatim (po LOOKUP_DICT, który był sprawdzany wcześniej)
-        print("Priorytetowe sprawdzanie LOOKUP_DICT dla kodu dwucyfrowego")
+        # DLA KODÓW DWUCYFROWYCH - NOWA KOLEJNOŚĆ:
+        # 1. PTV API -> 2. LOOKUP_DICT -> 3. Nominatim
+        print("Priorytetowe użycie PTV API dla kodu dwucyfrowego")
 
-        # Standardowy klucz
-        key = f"{norm_country}_{norm_postal}"
-        print(f"DEBUG: Sprawdzam klucz '{key}' w LOOKUP_DICT")
+        # Generujemy warianty zapytań
+        query_variants = [(f"{norm_country} postal code {norm_postal}", standard_key)]
+        if city and city.strip():
+            norm_city = city.strip().title()
+            clean_city = clean_text(norm_city)
+            query_variants.append((f"{norm_country} postal code {norm_postal}, {norm_city}",
+                                   f"{norm_country}_postal_{norm_postal}_{clean_city}"))
 
-        # Najpierw sprawdzamy LOOKUP_DICT
+        # 1. Próba geokodowania przez PTV API
+        print("Rozpoczynam geokodowanie przez PTV API dla kodów dwucyfrowych...")
+        for query_string, variant_key in query_variants:
+            ptv_result = ptv_geocode_by_text(query_string, PTV_API_KEY, language="pl", country_code=iso_code)
+            if ptv_result[0] is not None:
+                print(f"PTV API - wariant '{query_string}' zwrócił wynik: {ptv_result}")
+                geo_cache[variant_key] = ptv_result
+                # Zapisz wynik również pod standardowym kluczem
+                key = f"{norm_country}_{norm_postal}"
+                if key != variant_key:
+                    geo_cache[key] = ptv_result
+                print(f"Zapisano do geo_cache: {variant_key} -> {ptv_result}")
+                return ptv_result
+
+        # 2. Sprawdzamy LOOKUP_DICT
+        key = standard_key
+        print(f"PTV API nie zwróciło wyniku, sprawdzam klucz '{key}' w LOOKUP_DICT")
         if key in LOOKUP_DICT:
             lat, lon = LOOKUP_DICT[key]
             result = (lat, lon, "lookup", "lookup")
@@ -1065,67 +1182,86 @@ def get_coordinates(country, postal_code, city=None):
             geo_cache[key] = result
             return result
 
-        # Jeśli nie znaleziono, próbujemy z dodatkowymi formatami klucza
-        potential_keys = [
-            f"{norm_country}_{norm_postal.zfill(2)}",  # z dodanym zerem
-            f"{norm_country}_{norm_postal.lstrip('0')}",  # bez zer wiodących
-        ]
+        # 3. Jeśli PTV i LOOKUP_DICT nie znalazły lokalizacji, próbujemy Nominatim
+        print("LOOKUP_DICT nie zwrócił wyniku, wywołuję Nominatim...")
+        for query_string, variant_key in query_variants:
+            print(f"Nominatim - próba zapytania: '{query_string}' (klucz: {variant_key}) z country_codes={iso_code}")
+            try:
+                extra_params = {}  # Dla kodów nie-dwucyfrowych nie potrzebujemy polygon_geojson
+                location = geolocator.geocode(query_string, exactly_one=True, country_codes=iso_code, **extra_params)
+                time.sleep(0.1)
+                if location:
+                    # Sprawdź czy Nominatim zwrócił kod pocztowy
+                    returned_postal = location.raw.get('address', {}).get('postcode', '')
+                    if not returned_postal:
+                        print(f"Nominatim: Brak kodu pocztowego w odpowiedzi")
+                        continue
+                    
+                    # Sprawdź czy pierwsza cyfra kodu pocztowego się zgadza
+                    requested_first_digit = ''.join(c for c in norm_postal if c.isdigit())[0]
+                    returned_first_digit = ''.join(c for c in returned_postal if c.isdigit())[0]
+                    
+                    if requested_first_digit != returned_first_digit:
+                        print(f"Nominatim: Pierwsza cyfra kodu ({returned_first_digit}) nie zgadza się z szukaną ({requested_first_digit})")
+                        continue
+                    
+                    if "geojson" in location.raw and location.raw["geojson"]:
+                        geo = location.raw["geojson"]
+                        if geo.get("type") == "Polygon":
+                            coords = geo.get("coordinates")[0]
+                            lat = sum(point[1] for point in coords) / len(coords)
+                            lon = sum(point[0] for point in coords) / len(coords)
+                            quality = "centroid (polygon)"
+                        else:
+                            bb = location.raw.get("boundingbox")
+                            if bb:
+                                lat = (float(bb[0]) + float(bb[1])) / 2
+                                lon = (float(bb[2]) + float(bb[3])) / 2
+                                quality = "przybliżone (bounding box)"
+                            else:
+                                lat, lon = location.latitude, location.longitude
+                                quality = "dokładne"
+                    else:
+                        if hasattr(location, 'raw') and 'boundingbox' in location.raw:
+                            bb = location.raw['boundingbox']
+                            lat = (float(bb[0]) + float(bb[1])) / 2
+                            lon = (float(bb[2]) + float(bb[3])) / 2
+                            quality = 'przybliżone (bounding box)'
+                        else:
+                            lat, lon = location.latitude, location.longitude
+                            quality = 'dokładne'
+                    source = location.raw.get('osm_type', 'API Nominatim')
+                    display = location.raw.get('display_name', "").lower()
+                    if "poland" in display or "polska" in display:
+                        source = 'Polska (Nominatim)'
+                    elif "italy" in display or "italia" in display:
+                        source = 'Italy (Nominatim)'
+                    result = (lat, lon, quality, source)
+                    print(f"Nominatim - znaleziono wynik: {result}")
+                    geo_cache[variant_key] = result
+                    # Zapisz wynik również pod standardowym kluczem
+                    key = f"{norm_country}_{norm_postal}"
+                    if key != variant_key:
+                        geo_cache[key] = result
+                    print(f"Zapisano do geo_cache: {variant_key} -> {result}")
+                    return result
+            except Exception as e:
+                print(f"Błąd Nominatim przy zapytaniu '{query_string}': {e}")
 
-        for alt_key in potential_keys:
-            print(f"DEBUG: Sprawdzam alternatywny klucz '{alt_key}' w LOOKUP_DICT")
-            if alt_key in LOOKUP_DICT:
-                lat, lon = LOOKUP_DICT[alt_key]
-                result = (lat, lon, "lookup", "lookup")
-                print(f"LOOKUP: Znaleziono współrzędne dla {alt_key}: {result}")
-                # Zapisz wynik pod standardowym kluczem także
-                geo_cache[key] = result
-                return result
-
-        # Jeśli nadal nie znaleziono, próbujemy z częściowym dopasowaniem
-        for db_key in LOOKUP_DICT:
-            if db_key.startswith(f"{norm_country}_") and norm_postal in db_key:
-                lat, lon = LOOKUP_DICT[db_key]
-                result = (lat, lon, "lookup (częściowe dopasowanie)", "lookup")
-                print(f"LOOKUP (częściowe): Znaleziono współrzędne dla {db_key}: {result}")
-                # Zapisz wynik pod standardowym kluczem także
-                geo_cache[key] = result
-                return result
-
-        # Jeśli w LOOKUP_DICT nie znaleziono, przechodzimy do standardowych metod geokodowania
-        query_variants = [(f"{norm_country} postal code {norm_postal}", key)]
-        if city and city.strip():
-            norm_city = city.strip().title()
-            clean_city = clean_text(norm_city)
-            query_variants.append((f"{norm_country} postal code {norm_postal}, {norm_city}",
-                                   f"{norm_country}_postal_{norm_postal}_{clean_city}"))
+        # 4. Dla kodów nie-dwucyfrowych, na końcu sprawdzamy LOOKUP_DICT
+        key = f"{norm_country}_{norm_postal}"
+        if key in LOOKUP_DICT:
+            lat, lon = LOOKUP_DICT[key]
+            result = (lat, lon, "lookup (ostatnia opcja)", "lookup")
+            print(f"LOOKUP (ostatnia opcja): Znaleziono współrzędne dla {key}: {result}")
+            geo_cache[key] = result
+            return result
     else:
         # DLA KODÓW NIE-DWUCYFROWYCH - PRIORYTET MA PTV, POTEM NOMINATIM
         print("Priorytetowe użycie PTV API, potem Nominatim dla kodu nie-dwucyfrowego")
 
         # Generujemy warianty zapytań
         query_variants = generate_query_variants(country, norm_postal, city)
-
-    ISO_CODES = {
-        "Poland": "pl",
-        "Germany": "de",
-        "France": "fr",
-        "Italy": "it",
-        "Spain": "es",
-        "Netherlands": "nl",
-        "Belgium": "be",
-        "Czech Republic": "cz",
-        "Austria": "at",
-        "Slovakia": "sk",
-        "Slovenia": "si",
-        "Hungary": "hu",
-        "Portugal": "pt",
-        "Greece": "gr",
-        "Switzerland": "ch",
-        "Sweden": "se",
-        "Finland": "fi",
-        "Norway": "no",
-        "Denmark": "dk"
-    }
     iso_code = ISO_CODES.get(norm_country, "")
 
     # Sprawdzenie w cache dla wszystkich wariantów
@@ -1147,7 +1283,7 @@ def get_coordinates(country, postal_code, city=None):
         # 1. Próba geokodowania przez PTV API
         print("Wykonuję geokodowanie przez PTV API...")
         for query_string, variant_key in query_variants:
-            ptv_result = ptv_geocode_by_text(query_string, PTV_API_KEY, language="pl",country_code=iso_code)
+            ptv_result = ptv_geocode_by_text(query_string, PTV_API_KEY, language="pl", country_code=iso_code)
             if ptv_result[0] is not None:
                 print(f"PTV API - wariant '{query_string}' zwrócił wynik: {ptv_result}")
                 geo_cache[variant_key] = ptv_result
@@ -1167,6 +1303,20 @@ def get_coordinates(country, postal_code, city=None):
                 location = geolocator.geocode(query_string, exactly_one=True, country_codes=iso_code, **extra_params)
                 time.sleep(0.1)
                 if location:
+                    # Sprawdź czy Nominatim zwrócił kod pocztowy
+                    returned_postal = location.raw.get('address', {}).get('postcode', '')
+                    if not returned_postal:
+                        print(f"Nominatim: Brak kodu pocztowego w odpowiedzi")
+                        continue
+                    
+                    # Sprawdź czy pierwsza cyfra kodu pocztowego się zgadza
+                    requested_first_digit = ''.join(c for c in norm_postal if c.isdigit())[0]
+                    returned_first_digit = ''.join(c for c in returned_postal if c.isdigit())[0]
+                    
+                    if requested_first_digit != returned_first_digit:
+                        print(f"Nominatim: Pierwsza cyfra kodu ({returned_first_digit}) nie zgadza się z szukaną ({requested_first_digit})")
+                        continue
+                    
                     if "geojson" in location.raw and location.raw["geojson"]:
                         geo = location.raw["geojson"]
                         if geo.get("type") == "Polygon":
@@ -1310,22 +1460,36 @@ def get_ungeocoded_locations(df):
     print("Zbieranie unikalnych lokalizacji z pliku...")
     for _, row in df.iterrows():
         try:
-            kraj_zal = row['kraj_zaladunku']
-            kod_zal = str(row['kod_pocztowy_zaladunku']).strip()
-            miasto_zal = row.get('miasto_zaladunku', '')
-            if not isinstance(miasto_zal, str):
-                miasto_zal = ''
+            # Sprawdź czy to nie jest wiersz nagłówka
+            kraj_zal = str(row.get('kraj zaladunku', '')).strip()
+            if kraj_zal.lower() in ['kraj zaladunku', 'kraj załadunku', '']:
+                continue
+                
+            # Zachowaj dokładnie taki kod pocztowy, jaki jest w pliku
+            kod_zal = row.get('kod pocztowy zaladunku', '')
+            if kod_zal is not None:
+                kod_zal = str(kod_zal)
+            else:
+                kod_zal = ''
+            miasto_zal = str(row.get('miasto zaladunku', '')).strip()
 
-            kraj_rozl = row['kraj_rozladunku']
-            kod_rozl = str(row['kod_pocztowy_rozladunku']).strip()
-            miasto_rozl = row.get('miasto_rozladunku', '')
-            if not isinstance(miasto_rozl, str):
-                miasto_rozl = ''
+            kraj_rozl = str(row.get('kraj rozladunku', '')).strip()
+            # Zachowaj dokładnie taki kod pocztowy, jaki jest w pliku
+            kod_rozl = row.get('kod pocztowy rozladunku', '')
+            if kod_rozl is not None:
+                kod_rozl = str(kod_rozl)
+            else:
+                kod_rozl = ''
+            miasto_rozl = str(row.get('miasto rozladunku', '')).strip()
 
-            unique_locations.add((kraj_zal, kod_zal, miasto_zal.strip()))
-            unique_locations.add((kraj_rozl, kod_rozl, miasto_rozl.strip()))
+            # Dodaj tylko niepuste lokalizacje
+            if kraj_zal and kod_zal:
+                unique_locations.add((kraj_zal, kod_zal, miasto_zal))
+            if kraj_rozl and kod_rozl:
+                unique_locations.add((kraj_rozl, kod_rozl, miasto_rozl))
         except Exception as e:
-            print(f"Błąd podczas zbierania lokalizacji z wiersza: {e}")
+            print(f"Błąd podczas zbierania lokalizacji z wiersza: {str(e)}")
+            continue
 
     print(f"Zebrano {len(unique_locations)} unikalnych lokalizacji do sprawdzenia")
 
@@ -1337,7 +1501,8 @@ def get_ungeocoded_locations(df):
 
         # Normalizacja danych
         norm_country = normalize_country(country)
-        norm_postal = str(postal_code).strip()
+        # Zachowaj dokładnie taki kod pocztowy, jaki jest w pliku
+        norm_postal = str(postal_code) if postal_code is not None else ''
 
         print(f"Sprawdzanie geokodowania dla: {norm_country}, {norm_postal}, {city}")
 
@@ -1399,6 +1564,122 @@ def get_ungeocoded_locations(df):
     return ungeocoded_locations
 
 
+def get_all_locations_status(df):
+    """
+    Sprawdza status geokodowania dla wszystkich lokalizacji w pliku.
+    Zwraca dwie listy: poprawnie i niepoprawnie zgeokodowane lokalizacje.
+    """
+    ungeocoded_locations = []
+    geocoded_locations = []
+    unique_locations = set()
+
+    print("Zbieranie unikalnych lokalizacji z pliku...")
+    for _, row in df.iterrows():
+        try:
+            # Sprawdź czy to nie jest wiersz nagłówka
+            kraj_zal = str(row.get('kraj zaladunku', '')).strip()
+            if kraj_zal.lower() in ['kraj zaladunku', 'kraj załadunku', '']:
+                continue
+                
+            kod_zal = str(row.get('kod pocztowy zaladunku', '')).strip()
+            miasto_zal = str(row.get('miasto zaladunku', '')).strip()
+
+            kraj_rozl = str(row.get('kraj rozladunku', '')).strip()
+            kod_rozl = str(row.get('kod pocztowy rozladunku', '')).strip()
+            miasto_rozl = str(row.get('miasto rozladunku', '')).strip()
+
+            # Dodaj tylko niepuste lokalizacje
+            if kraj_zal and kod_zal:
+                unique_locations.add((kraj_zal, kod_zal, miasto_zal))
+            if kraj_rozl and kod_rozl:
+                unique_locations.add((kraj_rozl, kod_rozl, miasto_rozl))
+        except Exception as e:
+            print(f"Błąd podczas zbierania lokalizacji z wiersza: {str(e)}")
+            continue
+
+    print(f"Zebrano {len(unique_locations)} unikalnych lokalizacji do sprawdzenia")
+
+    location_id = 1  # Dodajemy licznik dla ID lokalizacji
+    for loc in unique_locations:
+        country, postal_code, city = loc
+        # Ujednolicamy city – jeśli None, ustaw pusty ciąg
+        if not isinstance(city, str):
+            city = ""
+
+        # Normalizacja danych
+        norm_country = normalize_country(country)
+        norm_postal = str(postal_code).strip()
+
+        print(f"Sprawdzanie geokodowania dla: {norm_country}, {norm_postal}, {city}")
+
+        # Sprawdzamy czy lokalizacja jest już zgeokodowana
+        is_geocoded = False
+        coords = None
+
+        # Standardowy klucz
+        std_key = f"{norm_country}_{norm_postal}"
+
+        # Sprawdź w geo_cache
+        if std_key in geo_cache:
+            cached = geo_cache[std_key]
+            if cached[0] is not None and cached[1] is not None:
+                print(f"Znaleziono w geo_cache: {std_key} -> {cached}")
+                is_geocoded = True
+                coords = f"{cached[0]},{cached[1]}"
+
+        # Sprawdź inne warianty kluczy w geo_cache
+        if not is_geocoded:
+            variants = generate_query_variants(country, postal_code, city)
+            for _, variant_key in variants:
+                if variant_key in geo_cache:
+                    cached = geo_cache[variant_key]
+                    if cached[0] is not None and cached[1] is not None:
+                        print(f"Znaleziono w geo_cache dla wariantu: {variant_key} -> {cached}")
+                        # Synchronizuj ze standardowym kluczem
+                        geo_cache[std_key] = cached
+                        is_geocoded = True
+                        coords = f"{cached[0]},{cached[1]}"
+                        break
+
+        # Jeśli nadal nie znaleziono, spróbuj zgeokodować
+        if not is_geocoded:
+            # Użyj get_coordinates do próby geokodowania
+            try:
+                result = get_coordinates(country, postal_code, city)
+                if result[0] is not None and result[1] is not None:
+                    print(f"Udało się zgeokodować: {country}, {postal_code}, {city} -> {result}")
+                    is_geocoded = True
+                    coords = f"{result[0]},{result[1]}"
+            except Exception as e:
+                print(f"Błąd przy próbie geokodowania: {e}")
+
+        # Dodaj lokalizację do odpowiedniej listy
+        location_data = {
+            'id': location_id,  # Dodajemy ID dla każdej lokalizacji
+            'country': country,
+            'postal_code': postal_code,
+            'city': city,
+            'key': std_key,
+        }
+        location_id += 1  # Inkrementujemy ID
+
+        if is_geocoded:
+            location_data['coords'] = coords
+            geocoded_locations.append(location_data)
+        else:
+            variants = generate_query_variants(country, postal_code, city)
+            location_data['query_variants'] = variants
+            ungeocoded_locations.append(location_data)
+
+    print(f"Znaleziono {len(ungeocoded_locations)} nierozpoznanych lokalizacji")
+    print(f"Znaleziono {len(geocoded_locations)} rozpoznanych lokalizacji")
+
+    return {
+        'correct_locations': geocoded_locations,
+        'locations': ungeocoded_locations
+    }
+
+
 def haversine(coord1, coord2):
     if None in coord1 or None in coord2:
         return None
@@ -1424,7 +1705,7 @@ def format_currency(value):
     if value is None or pd.isna(value):
         return None
     try:
-        return float(value)
+        return round(float(value), 2)
     except (ValueError, TypeError):
         return None
 
@@ -1433,7 +1714,9 @@ def select_best_rate(row, rate_columns):
     for col in rate_columns:
         rate = safe_float(row.get(col))
         if rate is not None:
-            return rate
+            # Zwróć zarówno stawkę jak i okres
+            period = col.split('_')[-1] if '_' in col else '3m'  # Domyślnie 3m
+            return {'rate': rate, 'period': period}
     return None
 
 
@@ -1448,84 +1731,29 @@ def calculate_fracht(distance, rate):
 
 def get_toll_cost(
     coord_from, coord_to,
+    loading_country=None, unloading_country=None,
     start_time="2023-08-29T10:00:00.000Z",
     routing_mode=DEFAULT_ROUTING_MODE,
     avoid_switzerland=True
 ):
-    request_id = f"toll_{coord_from}_{coord_to}_{int(time.time())}"
+    """
+    Pobiera koszty drogowe dla trasy między dwoma punktami.
+    Używa PTVRouteManager do pobrania i przetworzenia danych.
+    """
+    # Jeśli trasa jest do/ze Szwajcarii, nie unikamy Szwajcarii
+    if loading_country and unloading_country:
+        if is_route_to_or_from_switzerland(loading_country, unloading_country):
+            avoid_switzerland = False
     
-    def _make_request():
-        try:
-            base_url = "https://api.myptv.com/routing/v1/routes"
-            params = {
-                "waypoints": [f"{coord_from[0]},{coord_from[1]}", f"{coord_to[0]},{coord_to[1]}"],
-                "results": "TOLL_COSTS",
-                "options[trafficMode]": "AVERAGE",
-                "options[startTime]": start_time,
-                "options[routingMode]": routing_mode
-            }
-            if avoid_switzerland:
-                params["options[prohibitedCountries]"] = "CH"
-
-            headers = {"apiKey": PTV_API_KEY}
-            
-            print(f"[TOLL] Wywołanie kosztów drogowych dla: {coord_from} -> {coord_to}")
-            
-            response = requests.get(base_url, params=params, headers=headers)
-            if response.status_code == 200:
-                data = response.json()
-                toll = data.get("toll", {}).get("costs", {})
-                total_eur = toll.get("convertedPrice", {}).get("price")
-                print(f"[TOLL] SUMA EUR: {total_eur}")
-
-                # Rozbicie na kraje: długość i koszt
-                countries = toll.get("countries", [])
-                if countries:
-                    print("[TOLL] Rozbicie na kraje (długość trasy oraz koszt w EUR):")
-                    for kraj in countries:
-                        code = kraj.get("countryCode")
-                        converted = kraj.get("convertedPrice", {}).get("price")
-                        distance_m = kraj.get("distance") or kraj.get("length") or kraj.get("segmentLength")
-                        distance_km = round(distance_m / 1000, 1) if distance_m is not None else "?"
-                        print(f"    {code}: {distance_km} km / {converted} EUR")
-                
-                return total_eur
-            else:
-                print(f"[TOLL] Błąd API PTV: {response.status_code} - {response.text}")
-                return None
-        except Exception as e:
-            print(f"[TOLL] Wyjątek w get_toll_cost: {e}")
-            return None
-            
-    # Dodaj request do kolejki
-    ptv_manager.request_queue.add_request(request_id, _make_request)
-    
-    # Czekaj na wynik (z timeout)
-    max_wait = 30  # sekundy
-    start_time_wait = time.time()
-    while time.time() - start_time_wait < max_wait:
-        result = ptv_manager.request_queue.get_result(request_id)
-        if result is not None:
-            if result['status'] == 'success':
-                return result['data']
-            else:
-                print(f"[TOLL] Błąd w zapytaniu: {result['error']}")
-                return None
-        time.sleep(0.1)
-    
-    print("[TOLL] Timeout podczas oczekiwania na wynik")
+    result = ptv_manager.get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
+    if result and 'toll_cost' in result:
+        return result['toll_cost']
     return None
 
 
-
-
-
-
-
-def get_route_distance(coord_from, coord_to, avoid_switzerland=False, routing_mode=DEFAULT_ROUTING_MODE):
+def get_route_distance(coord_from, coord_to, avoid_switzerland=True, routing_mode=DEFAULT_ROUTING_MODE):
     result = ptv_manager.get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
     return result
-
 
 
 def verify_city_postal_code_match(country, postal_code, city, threshold_km=100):
@@ -1538,7 +1766,10 @@ def verify_city_postal_code_match(country, postal_code, city, threshold_km=100):
         'city_coords': None,
         'error': None,
         'lookup_coords': None,  # Nowe pole dla współrzędnych z LOOKUP_DICT
-        'suggested_coords': None  # Nowe pole dla sugerowanych współrzędnych
+        'suggested_coords': None,  # Nowe pole dla sugerowanych współrzędnych
+        'city_name': city,  # Dodaję nazwę miasta
+        'postal_name': postal_code,  # Dodaję kod pocztowy
+        'distance': None  # Dodaję pole distance dla odległości
     }
 
     # Bardziej dokładne sprawdzenie, czy miasto jest puste
@@ -1730,6 +1961,7 @@ def verify_city_postal_code_match(country, postal_code, city, threshold_km=100):
     result['postal_coords'] = postal_coords
     result['city_coords'] = city_coords
     result['distance_km'] = distance_km
+    result['distance'] = distance_km  # Ustawiam również pole distance
     print(f"Obliczona odległość między kodem pocztowym a miastem: {distance_km} km")
 
     # Jeśli odległość przekracza próg (domyślnie 30 km), wykonaj dodatkowe sprawdzenie
@@ -1788,8 +2020,7 @@ def get_all_rates(lc, lp, uc, up, lc_coords, uc_coords):
         historical_rates_df = pd.read_excel("historical_rates.xlsx",
                                             dtype={'kod pocztowy zaladunku': str, 'kod pocztowy rozladunku': str})
         historical_rates_gielda_df = pd.read_excel("historical_rates_gielda.xlsx",
-                                                   dtype={'kod pocztowy zaladunku': str,
-                                                          'kod pocztowy rozladunku': str})
+                                                   dtype={'kod pocztowy zaladunku': str, 'kod pocztowy rozladunku': str})
     except Exception as e:
         print(f"Błąd wczytywania danych historycznych: {e}")
         historical_rates_df = pd.DataFrame()
@@ -2136,11 +2367,10 @@ def get_all_rates(lc, lp, uc, up, lc_coords, uc_coords):
 def modify_process_przetargi(process_func):
     @wraps(process_func)
     def wrapper(*args, **kwargs):
-        global GEOCODING_TOTAL, GEOCODING_CURRENT
-        df = args[0] if args else kwargs.get('df')
+        global GEOCODING_CURRENT, GEOCODING_TOTAL
+        df = args[0]
         unique_locations = set()
         for _, row in df.iterrows():
-            # Ujednolicamy pola miasta – jeśli nie string, ustaw pusty ciąg
             city_load = row.get('miasto_zaladunku', '')
             if not isinstance(city_load, str):
                 city_load = ''
@@ -2158,13 +2388,20 @@ def modify_process_przetargi(process_func):
                 city_unload.strip()
             ))
         print(">>> Wywołanie geokodowania dla unikalnych lokalizacji:")
-        GEOCODING_TOTAL = len(unique_locations)
-        GEOCODING_CURRENT = 0
+        with progress_lock:
+            GEOCODING_TOTAL = len(unique_locations)
+            GEOCODING_CURRENT = 0
         for loc in unique_locations:
             print("Geokodowanie:", loc)
             get_coordinates(*loc)
-            GEOCODING_CURRENT += 1
-            print(get_geocoding_progress())
+            with progress_lock:
+                GEOCODING_CURRENT += 1
+                print(get_geocoding_progress())
+        
+        # Upewnij się, że po zakończeniu geokodowania postęp wynosi 100%
+        with progress_lock:
+            GEOCODING_CURRENT = GEOCODING_TOTAL
+            
         ungeocoded = get_ungeocoded_locations(df)
         if ungeocoded:
             print(">>> Nierozpoznane lokalizacje po geokodowaniu:", ungeocoded)
@@ -2172,7 +2409,6 @@ def modify_process_przetargi(process_func):
         else:
             print(">>> Wszystkie lokalizacje zostały poprawnie zgeokodowane.")
         return process_func(*args, **kwargs)
-
     return wrapper
 
 
@@ -2273,15 +2509,35 @@ def create_google_maps_link(coord_from, coord_to, polyline_str):
         return f"https://www.google.com/maps/dir/{coord_from[0]},{coord_from[1]}/{coord_to[0]},{coord_to[1]}"
 
 @modify_process_przetargi
-def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
-    global PROGRESS, TOTAL_ROWS, PREVIEW_DATA
-    TOTAL_ROWS = len(df)
-    PROGRESS = 0
+def process_przetargi(df, fuel_cost=0.40, driver_cost=210):
+    global PROGRESS, TOTAL_ROWS, PREVIEW_DATA, CURRENT_ROW, GEOCODING_TOTAL, RESULT_EXCEL
     results = []
-    
-    # Resetuj dane podglądu
-    PREVIEW_DATA['rows'] = []
-    PREVIEW_DATA['total_count'] = TOTAL_ROWS
+
+    with progress_lock:
+        TOTAL_ROWS = len(df)
+        PROGRESS = 0
+        PREVIEW_DATA = {
+            'headers': [
+                'Kraj załadunku',
+                'Kod pocztowy załadunku',
+                'Kraj rozładunku',
+                'Kod pocztowy rozładunku',
+                'Dystans (km)',
+                'Podlot (km)',  # Ta kolumna już istnieje
+                'Koszt paliwa',
+                'Opłaty drogowe',
+                'Koszt kierowcy + leasing',
+                'Opłaty/km',
+                'Opłaty drogowe (szczegóły)',
+                'Suma kosztów',
+                'Link do mapy',
+                'Sugerowany fracht'
+            ],
+            'rows': [],
+            'total_count': TOTAL_ROWS
+        }
+        # Usuwam niepotrzebne ustawienie GEOCODING_TOTAL, ponieważ jest już ustawiane w dekoratorze
+        # GEOCODING_TOTAL = TOTAL_ROWS * 2
 
     # Bezpośrednie przypisanie nowych nazw kolumn
     df.columns = ['Kraj zaladunku', 'Kod zaladunku', 'Miasto zaladunku',
@@ -2289,6 +2545,10 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
 
     for i, row in df.iterrows():
         try:
+            with progress_lock:
+                CURRENT_ROW = i + 1  # Aktualizacja numeru aktualnie przetwarzanego wiersza
+                PROGRESS = int((CURRENT_ROW / TOTAL_ROWS) * 100)  # Aktualizacja procentowego postępu
+            
             lc = normalize_country(row["Kraj zaladunku"])
             lp = row["Kod zaladunku"]
             lc_city = row["Miasto zaladunku"]
@@ -2305,22 +2565,30 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
             coords_roz = get_coordinates(uc, up, uc_city)
 
             if coords_zl and coords_roz and None not in coords_zl[:2] and None not in coords_roz[:2]:
-                print(f"\nPobieranie trasy dla: {lc_city} ({lp}) -> {uc_city} ({up})")
-                route_result = get_route_distance(coords_zl[:2], coords_roz[:2], avoid_switzerland=True,
-                                          routing_mode=DEFAULT_ROUTING_MODE)
+                route_result = get_route_distance(coords_zl[:2], coords_roz[:2], 
+                                          loading_country=lc, unloading_country=uc,
+                                          avoid_switzerland=True, routing_mode=DEFAULT_ROUTING_MODE)
                 if isinstance(route_result, dict):
                     dist_ptv = route_result.get('distance')
                     polyline = route_result.get('polyline', '')
-                    toll_cost = route_result.get('toll_cost')  # Pobierz opłaty drogowe z wyniku trasy
+                    road_toll = route_result.get('road_toll', 0)  # Standardowe opłaty drogowe
+                    other_toll = route_result.get('other_toll', 0)  # Opłaty za tunele/mosty/promy
+                    toll_cost = road_toll + other_toll  # Całkowity koszt opłat
+                    toll_details = route_result.get('toll_details', {})  # Szczegóły kosztów według krajów
                 else:
                     dist_ptv = route_result
                     polyline = ''
-                    toll_cost = None
+                    road_toll = 0
+                    other_toll = 0
+                    toll_cost = 0
+                    toll_details = {}
             else:
-                print(f"\nBrak współrzędnych dla: {lc_city} ({lp}) -> {uc_city} ({up})")
                 dist_ptv = None
                 polyline = ''
-                toll_cost = None
+                road_toll = 0
+                other_toll = 0
+                toll_cost = 0
+                toll_details = {}
 
             # Tworzenie linku do mapy
             if coords_zl and coords_roz and None not in coords_zl[:2] and None not in coords_roz[:2] and polyline:
@@ -2352,7 +2620,8 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
                 elif 2901 <= dist_ptv <= 3500:
                     driver_days = 6
                 else:
-                    driver_days = None
+                    # Dla dystansów powyżej 3500 km, oblicz dni proporcjonalnie
+                    driver_days = math.ceil(dist_ptv / 600)  # Średnio 600 km dziennie dla długich tras
             else:
                 driver_days = None
 
@@ -2381,7 +2650,7 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
             oplaty_drogowe_podlot = podlot * 0.30 if podlot is not None else None
 
             suma_kosztow = 0
-            for cost in [toll_cost, fuel_cost_value, driver_cost_value, oplaty_drogowe_podlot]:
+            for cost in [road_toll, fuel_cost_value, driver_cost_value, oplaty_drogowe_podlot]:
                 if cost is not None:
                     suma_kosztow += cost
 
@@ -2393,17 +2662,22 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
             dist_haversine = haversine(coords_zl[:2] if coords_zl else (None, None),
                                        coords_roz[:2] if coords_roz else (None, None))
 
-            gielda_rate = select_best_rate(rates, ['gielda_stawka_3m', 'gielda_stawka_6m', 'gielda_stawka_12m'])
-            hist_rate = select_best_rate(rates, ['hist_stawka_3m', 'hist_stawka_6m', 'hist_stawka_12m'])
+            gielda_rate_info = select_best_rate(rates, ['gielda_stawka_3m', 'gielda_stawka_6m', 'gielda_stawka_12m'])
+            hist_rate_info = select_best_rate(rates, ['hist_stawka_3m', 'hist_stawka_6m', 'hist_stawka_12m'])
 
-            if gielda_rate is None:
-                gielda_rate = select_best_rate(region_rates, ['region_gielda_stawka_3m',
+            if gielda_rate_info is None:
+                gielda_rate_info = select_best_rate(region_rates, ['region_gielda_stawka_3m',
                                                               'region_gielda_stawka_6m',
                                                               'region_gielda_stawka_12m'])
-            if hist_rate is None:
-                hist_rate = select_best_rate(region_rates, ['region_klient_stawka_3m',
+            if hist_rate_info is None:
+                hist_rate_info = select_best_rate(region_rates, ['region_klient_stawka_3m',
                                                             'region_klient_stawka_6m',
                                                             'region_klient_stawka_12m'])
+                                                            
+            gielda_rate = gielda_rate_info['rate'] if gielda_rate_info else None
+            hist_rate = hist_rate_info['rate'] if hist_rate_info else None
+            gielda_period = gielda_rate_info['period'] if gielda_rate_info else None
+            hist_period = hist_rate_info['period'] if hist_rate_info else None
 
             # Obliczenie frachtów na podstawie dystansu PTV i dystansu całkowitego
             gielda_fracht_km_ptv = calculate_fracht(dist_ptv, gielda_rate)
@@ -2413,6 +2687,7 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
 
             gielda_fracht_3m = rates.get('gielda_fracht_3m')
             hist_fracht_3m = rates.get('hist_fracht_3m')
+
             # Pobierz współrzędne z verify_load i verify_unload
             city_load_coords = None
             postal_load_coords = None
@@ -2437,41 +2712,75 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
 
             # Przygotuj informacje o opłatach drogowych dla poszczególnych krajów
             toll_info = []
-            total_toll = 0
-            if isinstance(route_result, dict) and 'toll_details' in route_result:
-                for country, amount in route_result['toll_details'].items():
+            if toll_details:
+                for country, amount in toll_details.items():
                     if amount > 0:
                         toll_info.append(f"{country}: {format_currency(amount)}€")
-                        total_toll += amount
             toll_text = "\n".join(toll_info) if toll_info else "-"
             
-            # Oblicz koszt opłat na kilometr
-            toll_per_km = total_toll / dist_ptv if dist_ptv and dist_ptv > 0 and total_toll > 0 else 0
+            # Dodaj informacje o podziale na opłaty standardowe i specjalne
+            if other_toll > 0:
+                toll_text += f"\n\nDodatkowe opłaty (tunele/mosty/promy): {format_currency(other_toll)}€" #toll_text += f"\n\nOpłaty drogowe: {format_currency(road_toll)}€"
+                #if other_toll > 0:
+                    #toll_text += f"\nDodatkowe opłaty (tunele/mosty/promy): {format_currency(other_toll)}€"
 
-            # Dodaj dane do podglądu (maksymalnie 10 ostatnich wierszy)
+            # Oblicz koszt opłat na kilometr (tylko standardowe opłaty drogowe)
+            toll_per_km = road_toll / dist_ptv if dist_ptv and dist_ptv > 0 else 0
+            print(f"\nDEBUG - Wartości przed sumowaniem dla wiersza:")
+            print(f"fuel_cost_value: {fuel_cost_value} ({type(fuel_cost_value).__name__})")
+            print(f"driver_cost_value: {driver_cost_value} ({type(driver_cost_value).__name__})")
+            print(f"road_toll: {road_toll} ({type(road_toll).__name__})")
+            print(f"other_toll: {other_toll} ({type(other_toll).__name__})")
+            print(f"oplaty_drogowe_podlot: {oplaty_drogowe_podlot} ({type(oplaty_drogowe_podlot)})")
+    
+            # Oblicz sumę kosztów (dodaj opłaty specjalne)
+            print("\nDEBUG - Wartości kosztów:")
+            print(f"fuel_cost_value: {fuel_cost_value} ({type(fuel_cost_value).__name__})")
+            print(f"driver_cost_value: {driver_cost_value} ({type(driver_cost_value).__name__})")
+            print(f"road_toll: {road_toll} ({type(road_toll).__name__})")
+            print(f"other_toll: {other_toll} ({type(other_toll).__name__})")
+            print(f"oplaty_drogowe_podlot: {oplaty_drogowe_podlot} ({type(oplaty_drogowe_podlot).__name__})")
+            
+            suma_kosztow = fuel_cost_value + driver_cost_value + road_toll + other_toll + oplaty_drogowe_podlot
+
+            # Tworzenie preview_row dla udanego przetwarzania
+            # Konwertuj wartości NaN na None przed utworzeniem słownika
             preview_row = {
-                'Kraj załadunku': lc,
-                'Kod pocztowy załadunku': lp,
-                'Kraj rozładunku': uc,
-                'Kod pocztowy rozładunku': up,
+                'Kraj załadunku': None if pd.isna(lc) else str(lc),
+                'Kod pocztowy załadunku': None if pd.isna(lp) else str(lp),
+                'Kraj rozładunku': None if pd.isna(uc) else str(uc),
+                'Kod pocztowy rozładunku': None if pd.isna(up) else str(up),
                 'Dystans (km)': dist_ptv,
+                'Podlot (km)': podlot,
                 'Koszt paliwa': fuel_cost_value,
-                'Koszt kierowcy': driver_cost_value,
+                'Koszt kierowcy + leasing': driver_cost_value,
                 'Opłaty drogowe (szczegóły)': toll_text,
-                'Suma opłat drogowych': total_toll,
+                'Opłaty drogowe': road_toll,
+                'Opłaty specjalne': other_toll,
                 'Opłaty/km': toll_per_km,
                 'Suma kosztów': suma_kosztow,
-                'Link do mapy': map_link if map_link else "-"
+                'Link do mapy': map_link if map_link else "-",
+                'Sugerowany fracht': klient_fracht_km_total if klient_fracht_km_total is not None else gielda_fracht_km_total,
+                'Sugerowany fracht źródło': 'klient' if klient_fracht_km_total is not None else 'gielda',
+                'Sugerowany fracht okres': hist_period if klient_fracht_km_total is not None else gielda_period,
+                'Region - Klient stawka 3m': region_rates.get('region_klient_stawka_3m'),
+                'Region - Klient stawka 6m': region_rates.get('region_klient_stawka_6m'),
+                'Region - Klient stawka 12m': region_rates.get('region_klient_stawka_12m'),
+                'Region - Giełda stawka 3m': region_rates.get('region_gielda_stawka_3m'),
+                'Region - Giełda stawka 6m': region_rates.get('region_gielda_stawka_6m'),
+                'Region - Giełda stawka 12m': region_rates.get('region_gielda_stawka_12m')
             }
+
+            # Dodawanie do podglądu niezależnie od tego czy był błąd czy nie
             PREVIEW_DATA['rows'].append(preview_row)
-            if len(PREVIEW_DATA['rows']) > 10:
+            if len(PREVIEW_DATA['rows']) > 1000:
                 PREVIEW_DATA['rows'].pop(0)
 
             # Przygotuj wyniki z dodanymi kolumnami regionalnymi
             result_dict = {
-                "Kraj zaladunku": lc,
-                "Kod zaladunku": lp,
-                "Miasto zaladunku": lc_city,
+                "Kraj zaladunku": None if pd.isna(lc) else str(lc),
+                "Kod zaladunku": None if pd.isna(lp) else str(lp),
+                "Miasto zaladunku": None if pd.isna(lc_city) else str(lc_city),
                 "Współrzędne zaladunku": lc_coords_str,
                 "Jakość geokodowania (zał.)": lc_jakosc,
                 "Źródło geokodowania (zał.)": lc_zrodlo,
@@ -2482,358 +2791,314 @@ def process_przetargi(df, fuel_cost=0.40, driver_cost=130):
                 "Jakość geokodowania (rozł.)": uc_jakosc,
                 "Źródło geokodowania (rozł.)": uc_zrodlo,
                 "km PTV (tylko ładowne)": format_currency(dist_ptv),
-                "km całkowite z podlotem": format_currency(total_distance),  # Nowa kolumna
-                "podlot": format_currency(podlot),  # Zmieniona nazwa kolumny
+                "km całkowite z podlotem": format_currency(total_distance),
+                "podlot": format_currency(podlot),
                 "km w linii prostej": format_currency(dist_haversine),
-                "Link do mapy": map_link,
-                "Dopasowanie (giełda)": rates.get('dopasowanie_gielda'),
-                "Giełda_stawka_3m": format_currency(safe_float(rates.get('gielda_stawka_3m'))),
-                "Giełda_stawka_6m": format_currency(safe_float(rates.get('gielda_stawka_6m'))),
-                "Giełda_stawka_12m": format_currency(safe_float(rates.get('gielda_stawka_12m'))),
-                "Giełda - fracht historyczny": format_currency(gielda_fracht_3m),
-                "Giełda - fracht proponowany km ładowne": format_currency(gielda_fracht_km_ptv),
-                "Giełda - fracht proponowany km całkowite": format_currency(gielda_fracht_km_total),  # Zmieniona nazwa
-                "Dopasowanie (Klient)": rates.get('dopasowanie_hist'),
-                "Klient_stawka_3m": format_currency(safe_float(rates.get('hist_stawka_3m'))),
-                "Klient_stawka_6m": format_currency(safe_float(rates.get('hist_stawka_6m'))),
-                "Klient_stawka_12m": format_currency(safe_float(rates.get('hist_stawka_12m'))),
-                "Klient - fracht historyczny": format_currency(hist_fracht_3m),
-                "Klient - fracht proponowany km ładowne": format_currency(klient_fracht_km_ptv),
-                "Klient - fracht proponowany km całkowite": format_currency(klient_fracht_km_total),  # Zmieniona nazwa
-                "Relacja": rates.get('relacja'),
-                "Tryb wyznaczania trasy": DEFAULT_ROUTING_MODE,
-                "opłaty drogowe (EUR)": format_currency(toll_cost),
-                "Opłaty drogowe/km (EUR)": format_currency(toll_per_km),
-                "Koszt paliwa (EUR)": format_currency(fuel_cost_value),
-                "Koszt kierowcy (EUR)": format_currency(driver_cost_value),
-                "Opłaty drogowe podlot (EUR)": format_currency(oplaty_drogowe_podlot),
-                "Suma kosztów (EUR)": format_currency(suma_kosztow),
-                "Odległość miasto-kod pocztowy załadunku (km)": format_currency(verify_load.get('distance_km')),
-                "Zgodność lokalizacji załadunku": "Tak" if verify_load.get('is_match') else "Nie",
-                "Koordynaty miasta załadunku": city_load_coords,
-                "Koordynaty kodu pocztowego załadunku": postal_load_coords,
-                "Odległość miasto-kod pocztowy rozładunku (km)": format_currency(verify_unload.get('distance_km')),
-                "Zgodność lokalizacji rozładunku": "Tak" if verify_unload.get('is_match') else "Nie",
-                "Koordynaty miasta rozładunku": city_unload_coords,
-                "Koordynaty kodu pocztowego rozładunku": postal_unload_coords,
-                "Uwagi dotyczące współrzędnych": suggested_coords_info if suggested_coords_info else None,
-
-                # Nowe kolumny z danymi regionalnymi
-                "Region załadunku": region_rates.get('region_relacja', "").split(' - ')[0] if ' - ' in region_rates.get(
-                    'region_relacja', "") else "",
-                "Region rozładunku": region_rates.get('region_relacja', "").split(' - ')[
-                    1] if ' - ' in region_rates.get('region_relacja', "") else "",
-                "Region - dopasowanie": region_rates.get('region_dopasowanie'),
-                "Region - Giełda stawka 3m": format_currency(safe_float(region_rates.get('region_gielda_stawka_3m'))),
-                "Region - Giełda stawka 6m": format_currency(safe_float(region_rates.get('region_gielda_stawka_6m'))),
-                "Region - Giełda stawka 12m": format_currency(safe_float(region_rates.get('region_gielda_stawka_12m'))),
-                "Region - Klient stawka 3m": format_currency(safe_float(region_rates.get('region_klient_stawka_3m'))),
-                "Region - Klient stawka 6m": format_currency(safe_float(region_rates.get('region_klient_stawka_6m'))),
-                "Region - Klient stawka 12m": format_currency(safe_float(region_rates.get('region_klient_stawka_12m'))),
+                # Zamień link na tekst "Mapa" już na etapie tworzenia DataFrame
+                "Link do mapy": "Mapa" if map_link and isinstance(map_link, str) and map_link.startswith('http') else map_link,
+                # Zapisz oryginalny link w ukrytej kolumnie
+                "_original_map_link": map_link,
+                "Dopasowanie giełda": rates.get('gielda_dopasowanie'),
+                "Giełda stawka 3m": format_currency(rates.get('gielda_stawka_3m')),
+                "Giełda stawka 6m": format_currency(rates.get('gielda_stawka_6m')),
+                "Giełda stawka 12m": format_currency(rates.get('gielda_stawka_12m')),
+                "Giełda fracht 3m": format_currency(gielda_fracht_3m),
+                "Giełda sugerowany fracht/km PTV": format_currency(gielda_fracht_km_ptv),
+                "Giełda sugerowany fracht/km z podlotem": format_currency(gielda_fracht_km_total),
+                "Dopasowanie klient": rates.get('hist_dopasowanie'),
+                "Klient stawka 3m": format_currency(rates.get('hist_stawka_3m')),
+                "Klient stawka 6m": format_currency(rates.get('hist_stawka_6m')),
+                "Klient stawka 12m": format_currency(rates.get('hist_stawka_12m')),
+                "Klient fracht 3m": format_currency(hist_fracht_3m),
+                "Klient sugerowany fracht/km PTV": format_currency(klient_fracht_km_ptv),
+                "Klient sugerowany fracht/km z podlotem": format_currency(klient_fracht_km_total),
+                "Koszt paliwa": format_currency(fuel_cost_value),
+                "Koszt kierowcy + leasing": format_currency(driver_cost_value),
+                "Opłaty drogowe": format_currency(road_toll),
+                "Opłaty specjalne": format_currency(other_toll),
+                "Opłaty drogowe podlot": format_currency(oplaty_drogowe_podlot),
+                "Opłaty drogowe/km": format_currency(toll_per_km),
+                "Suma kosztów": format_currency(suma_kosztow),
+                "Szczegóły opłat drogowych": toll_text,
+                "Weryfikacja załadunku - miasto": verify_load.get('city_name', ''),
+                "Weryfikacja załadunku - kod pocztowy": verify_load.get('postal_name', ''),
+                "Weryfikacja załadunku - współrzędne miasta": city_load_coords,
+                "Weryfikacja załadunku - współrzędne kodu": postal_load_coords,
+                "Weryfikacja załadunku - odległość (km)": format_currency(verify_load.get('distance_km')),
+                "Weryfikacja załadunku - poprawna": "TAK" if verify_load.get('is_match', True) else "NIE",
+                "Weryfikacja rozładunku - miasto": verify_unload.get('city_name', ''),
+                "Weryfikacja rozładunku - kod pocztowy": verify_unload.get('postal_name', ''),
+                "Weryfikacja rozładunku - współrzędne miasta": city_unload_coords,
+                "Weryfikacja rozładunku - współrzędne kodu": postal_unload_coords,
+                "Weryfikacja rozładunku - odległość (km)": format_currency(verify_unload.get('distance_km')),
+                "Weryfikacja rozładunku - poprawna": "TAK" if verify_unload.get('is_match', True) else "NIE",
+                "Uwagi do geokodowania": suggested_coords_info,
+                "Region załadunku": get_region(lc, lp),
+                "Region rozładunku": get_region(uc, up),
+                "Region - Dopasowanie giełda": region_rates.get('region_gielda_dopasowanie'),
+                "Region - Giełda stawka 3m": format_currency(region_rates.get('region_gielda_stawka_3m')),
+                "Region - Giełda stawka 6m": format_currency(region_rates.get('region_gielda_stawka_6m')),
+                "Region - Giełda stawka 12m": format_currency(region_rates.get('region_gielda_stawka_12m')),
+                "Region - Dopasowanie klient": region_rates.get('region_klient_dopasowanie'),
+                "Region - Klient stawka 3m": format_currency(region_rates.get('region_klient_stawka_3m')),
+                "Region - Klient stawka 6m": format_currency(region_rates.get('region_klient_stawka_6m')),
+                "Region - Klient stawka 12m": format_currency(region_rates.get('region_klient_stawka_12m'))
             }
 
             results.append(result_dict)
 
-            if i % 10 == 0 or i == len(df) - 1:
-                PROGRESS = int((i + 1) / TOTAL_ROWS * 100)
+            # Aktualizuj postęp po każdym wierszu
+            PROGRESS = int((i + 1) / TOTAL_ROWS * 100)
         except Exception as e:
-            print(f"Błąd przetwarzania wiersza {i}: {e}")
+            print(f"\n❌ BŁĄD w wierszu {CURRENT_ROW}: {str(e)}")
+            print(f"Szczegóły wiersza: {dict(row)}")
+            print("Traceback:")
+            import traceback
+            traceback.print_exc()
+            
+            # Tworzenie basic_result dla pliku Excel
+            basic_result = {
+               "Kraj zaladunku": lc,
+               "Kod zaladunku": lp,
+               "Miasto zaladunku": lc_city,
+               "Kraj rozladunku": uc,
+               "Kod rozładunku": up,
+               "Miasto rozładunku": uc_city,
+               "Błąd przetwarzania": str(e)
+            }
+            results.append(basic_result)
+            
+            # Dodanie wiersza do podglądu z informacją o błędzie
+            preview_row = {
+                'Kraj załadunku': lc,
+                'Kod pocztowy załadunku': lp,
+                'Kraj rozładunku': uc,
+                'Kod pocztowy rozładunku': up,
+                'Dystans (km)': None,
+                'Podlot (km)': None,
+                'Koszt paliwa': None,
+                'Koszt kierowcy + leasing': None,
+                'Opłaty drogowe (szczegóły)': None,
+                'Opłaty drogowe': None,
+                'Opłaty specjalne': None,
+                'Opłaty/km': None,
+                'Suma kosztów': None,
+                'Link do mapy': "-",
+                'Sugerowany fracht': None,
+                'Region - Klient stawka 3m': None,
+                'Region - Klient stawka 6m': None,
+                'Region - Klient stawka 12m': None,
+                'Region - Giełda stawka 3m': None,
+                'Region - Giełda stawka 6m': None,
+                'Region - Giełda stawka 12m': None
+            }
+            
+            # Dodawanie do podglądu niezależnie od tego czy był błąd czy nie
+            PREVIEW_DATA['rows'].append(preview_row)
+            if len(PREVIEW_DATA['rows']) > 1000:
+                PREVIEW_DATA['rows'].pop(0)
+            
+            # Dodanie wiersza do podglądu z informacją o błędzie
+            preview_row = {
+                'Kraj załadunku': lc,
+                'Kod pocztowy załadunku': lp,
+                'Kraj rozładunku': uc,
+                'Kod pocztowy rozładunku': up,
+                'Dystans (km)': None,
+                'Podlot (km)': None,
+                'Koszt paliwa': None,
+                'Koszt kierowcy + leasing': None,
+                'Opłaty drogowe (szczegóły)': f"BŁĄD: {str(e)}",
+                'Opłaty drogowe': None,
+                'Opłaty specjalne': None,
+                'Opłaty/km': None,
+                'Suma kosztów': None,
+                'Link do mapy': "-",
+                'Sugerowany fracht': None,
+                'Region - Klient stawka 3m': None,
+                'Region - Klient stawka 6m': None,
+                'Region - Klient stawka 12m': None,
+                'Region - Giełda stawka 3m': None,
+                'Region - Giełda stawka 6m': None,
+                'Region - Giełda stawka 12m': None
+            }
 
-    print("Tworzenie pliku wynikowego...")
-    # Zaktualizuj columns_order, aby zawierał nowe kolumny
-    columns_order = [
-        "Kraj zaladunku", "Kod zaladunku", "Miasto zaladunku", "Współrzędne zaladunku",
-        ##"Jakość geokodowania (zał.)", "Źródło geokodowania (zał.)",
-        "Kraj rozladunku", "Kod rozładunku", "Miasto rozładunku", "Współrzędne rozładunku",
-        ##"Jakość geokodowania (rozł.)", "Źródło geokodowania (rozł.)",
-        "km PTV (tylko ładowne)",
-        "km całkowite z podlotem",  # Nowa kolumna
-        "podlot",  # Zmieniona nazwa
-        "Link do mapy",
-        # "km w linii prostej",
-        # "Dopasowanie (giełda)",
-        "Giełda_stawka_3m", "Giełda_stawka_6m", "Giełda_stawka_12m",
-        ##"Giełda_stawka_48m",
-        "Giełda - fracht historyczny", "Giełda - fracht proponowany km ładowne",
-        "Giełda - fracht proponowany km całkowite",  # Zmieniona nazwa
-        ##"Dopasowanie (Klient)",
-        "Klient_stawka_3m", "Klient_stawka_6m", "Klient_stawka_12m",
-        ##"Klient_stawka_48m",
-        "Klient - fracht historyczny", "Klient - fracht proponowany km ładowne",
-        "Klient - fracht proponowany km całkowite",  # Zmieniona nazwa
-        "Relacja",
-        ##"Tryb wyznaczania trasy",
-        "opłaty drogowe (EUR)", "Opłaty drogowe/km (EUR)", "Koszt paliwa (EUR)", "Koszt kierowcy (EUR)",
-        "Opłaty drogowe podlot (EUR)", "Suma kosztów (EUR)",
-        "Odległość miasto-kod pocztowy załadunku (km)",
-        "Zgodność lokalizacji załadunku",
-        "Koordynaty miasta załadunku", "Koordynaty kodu pocztowego załadunku",
-        "Odległość miasto-kod pocztowy rozładunku (km)",
-        "Zgodność lokalizacji rozładunku",
-        "Koordynaty miasta rozładunku", "Koordynaty kodu pocztowego rozładunku",
-        "Uwagi dotyczące współrzędnych",
+        finally:
+            pass
 
-        # Nowe kolumny regionalne
-        "Region załadunku",
-        "Region rozładunku",
-        "Region - dopasowanie",
-        "Region - Giełda stawka 3m",
-        "Region - Giełda stawka 6m",
-        "Region - Giełda stawka 12m",
-        "Region - Klient stawka 3m",
-        "Region - Klient stawka 6m",
-        "Region - Klient stawka 12m"
-    ]
+    print(f"\nPrzetworzono {CURRENT_ROW} z {TOTAL_ROWS} wierszy")
+    
+    print("\nGenerowanie pliku Excel...")
+    try:
+        # Tworzenie DataFrame z wyników
+        result_df = pd.DataFrame(results)
+        
+        # Usuń ukrytą kolumnę przed zapisaniem do Excela
+        if '_original_map_link' in result_df.columns:
+            # Zapisz wartości do zmiennej tymczasowej, aby można było ich użyć później
+            original_map_links = result_df['_original_map_link'].copy()
+            # Usuń kolumnę z DataFrame
+            result_df = result_df.drop(columns=['_original_map_link'])
+        else:
+            original_map_links = None
+        
+        # Zapisz do bufora w pamięci
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            result_df.to_excel(writer, index=False, sheet_name='Wycena')
+            
+            # Pobierz worksheet do formatowania
+            worksheet = writer.sheets['Wycena']
+            
+            # Funkcja do konwersji numeru kolumny na nazwę kolumny Excel
+            def get_column_letter(n):
+                string = ""
+                while n > 0:
+                    n, remainder = divmod(n - 1, 26)
+                    string = chr(65 + remainder) + string
+                return string
 
-    df_out = pd.DataFrame(results)
-    for col in columns_order:
-        if col not in df_out.columns:
-            df_out[col] = None
-    df_out = df_out[columns_order]
+            # Definicje kolorów dla różnych typów kolumn
+            COLORS = {
+                'podstawowe': 'E6E6E6',  # Szary
+                'geokodowanie': 'FFE699',  # Jasny żółty
+                'dystans': 'BDD7EE',  # Jasny niebieski
+                'gielda': 'C6E0B4',  # Jasny zielony
+                'klient': 'F8CBAD',  # Jasny pomarańczowy
+                'koszty': 'D9D9D9',  # Jaśniejszy szary
+                'region': 'E2EFDA',  # Bardzo jasny zielony
+                'weryfikacja': 'FCE4D6'  # Bardzo jasny pomarańczowy
+            }
 
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='xlsxwriter', engine_kwargs={'options': {'nan_inf_to_errors': True}}) as writer:
-        df_out.to_excel(writer, index=False, sheet_name='Wyniki')
-        workbook = writer.book
-        worksheet = writer.sheets['Wyniki']
+            # Mapowanie kolumn do typów (indeksowane od 1)
+            COLUMN_TYPES = {
+                'podstawowe': [1, 2, 3, 7, 8, 9],  # A, B, C, G, H, I
+                'geokodowanie': [4, 5, 6, 10, 11, 12],  # D, E, F, J, K, L
+                'dystans': [13, 14, 15, 16, 17],  # M, N, O, P, Q
+                'gielda': [18, 19, 20, 21, 22, 23, 24, 56, 57, 58],  # R-X
+                'klient': [25, 26, 27, 28, 29, 30, 31, 59, 60, 61, 62],  # Y-AE
+                'koszty': [32, 33, 34, 35, 36, 37, 38],  # AF-AL
+                'region': [53, 54, 55],  # AW-BE
+                'weryfikacja': [39, 40, 41, 42, 43, 44, 45, 46, 47, 48,49, 50, 51, 52]  # AM-AV
+            }
+            
+            # Zamień długie linki do map na krótki tekst "Mapa" przed ustawieniem szerokości kolumn
+            if "Link do mapy" in result_df.columns:
+                # Dodajemy więcej informacji diagnostycznych
+                print(f"Zamieniam linki na tekst 'Mapa'. Liczba linków do zamiany: {result_df['Link do mapy'].str.startswith('http', na=False).sum()}")
+                # Nie musimy już tworzyć tymczasowej kolumny, bo mamy już _original_map_link
+                # Upewnij się, że wszystkie linki są zamienione na "Mapa"
+                result_df.loc[result_df['Link do mapy'].str.startswith('http', na=False), 'Link do mapy'] = "Mapa"
+                print(f"Po zamianie, liczba komórek z tekstem 'Mapa': {(result_df['Link do mapy'] == 'Mapa').sum()}")
+                
+            # Ustaw szerokość kolumn i formatowanie
+            for idx, col in enumerate(result_df.columns, start=1):
+                column_letter = get_column_letter(idx)
+                
+                # Ustaw szerokość
+                max_length = max(
+                    result_df.iloc[:, idx-1].astype(str).apply(len).max(),
+                    len(str(col))
+                )
+                adjusted_width = min(max(max_length + 2, 10), 50)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
 
-        # Definicje formatów
-        header_format = workbook.add_format({
-            'bold': True,
-            'text_wrap': True,
-            'align': 'center',
-            'valign': 'vcenter',
-            'border': 1,
-            'border_color': '#000000',
-            'bg_color': '#D9D9D9'
-        })
+                # Ustaw kolor tła dla całej kolumny
+                for col_type, columns in COLUMN_TYPES.items():
+                    if idx in columns:
+                        for cell in worksheet[column_letter]:
+                            cell.fill = openpyxl.styles.PatternFill(
+                                start_color=COLORS[col_type],
+                                end_color=COLORS[col_type],
+                                fill_type='solid'
+                            )
+            
+            # Formatowanie nagłówków
+            for cell in worksheet[1]:
+                cell.font = openpyxl.styles.Font(bold=True)
+                cell.alignment = openpyxl.styles.Alignment(horizontal='center', vertical='center', wrap_text=True)
+            
+            # Lista kolumn z różnymi formatami
+            distance_columns = [13, 14, 15, 16, 43, 47, 55, 59]  # M, N, O, P, AQ, AU - dystans i odległości weryfikacji
+            percentage_columns = [18, 25, 51]  # R, Y, AY - dopasowanie
+            currency_columns = [19, 20, 21, 22, 23, 24, 26, 27, 28, 29, 30, 31,  # Stawki i frachty
+                              32, 33, 34, 35, 36, 37, 38,  # Koszty
+                              52, 53, 54, 56, 57, 58, 60, 61, 62]  # Stawki regionalne
+            
+            # Formatowanie komórek z danymi
+            for row_idx, row in enumerate(worksheet.iter_rows(min_row=2)):
+                for cell in row:
+                    cell.alignment = openpyxl.styles.Alignment(horizontal='center', vertical='center')
+                    
+                    # Formatowanie liczb
+                    if isinstance(cell.value, (int, float)):
+                        if cell.column in distance_columns:  # Kolumny z kilometrami
+                            cell.number_format = '#,##0'
+                        elif cell.column in percentage_columns:  # Kolumny z procentami
+                            cell.number_format = '0.0%'
+                        elif cell.column in currency_columns:  # Kolumny z walutą
+                            cell.number_format = '#,##0.00 €'
+                        else:  # Pozostałe kolumny liczbowe
+                            cell.number_format = '#,##0'
+                    
+                    # Dodaj hiperłącza do komórek z tekstem "Mapa" lub linkami
+                    if cell.column == 17:  # Kolumna z linkami do map (Q)
+                        column_name = list(result_df.columns)[cell.column-1]  # Sprawdź nazwę kolumny
+                        if column_name == "Link do mapy":
+                            # Sprawdź czy komórka zawiera link lub tekst "Mapa"
+                            if cell.value == "Mapa" and original_map_links is not None:
+                                # Pobierz oryginalny link z zapisanej zmiennej
+                                original_link = original_map_links.iloc[row_idx] if row_idx < len(original_map_links) else None
+                                if isinstance(original_link, str) and original_link.startswith('http'):
+                                    # Dodaj hiperłącze
+                                    cell.hyperlink = original_link
+                                    # Ustaw styl hiperłącza
+                                    cell.font = openpyxl.styles.Font(color="0000FF", underline="single")
+                            # Dodatkowe sprawdzenie dla linków, które nie zostały zamienione
+                            elif isinstance(cell.value, str) and cell.value.startswith('http'):
+                                # Zapisz oryginalny link
+                                link_url = cell.value
+                                # Zamień wartość komórki na krótki tekst
+                                cell.value = "Mapa"
+                                # Dodaj hiperłącze
+                                cell.hyperlink = link_url
+                                # Ustaw styl hiperłącza
+                                cell.font = openpyxl.styles.Font(color="0000FF", underline="single")
+                                print(f"Zamieniono link na 'Mapa' w komórce Excel (wiersz {row_idx+1}, kolumna {cell.column})")
+            
+            # Dodaj obramowanie do wszystkich komórek
+            thin_border = openpyxl.styles.Border(
+                left=openpyxl.styles.Side(style='thin'),
+                right=openpyxl.styles.Side(style='thin'),
+                top=openpyxl.styles.Side(style='thin'),
+                bottom=openpyxl.styles.Side(style='thin')
+            )
+            
+            for row in worksheet.iter_rows():
+                for cell in row:
+                    cell.border = thin_border
+            
+            # Zamrożenie pierwszego wiersza
+            worksheet.freeze_panes = 'A2'
+        
+        # Pobierz zawartość bufora
+        excel_buffer.seek(0)
+        excel_data = excel_buffer.getvalue()
+        
+        # Aktualizuj zmienną globalną w bezpieczny sposób
+        with progress_lock:
+            print(f"[process_przetargi] Ustawiam RESULT_EXCEL, rozmiar danych: {len(excel_data)} bajtów")
+            RESULT_EXCEL = excel_data
+        
+        print("Plik Excel został wygenerowany pomyślnie.")
+    except Exception as e:
+        print(f"Błąd podczas generowania pliku Excel: {e}")
+        with progress_lock:
+            print("[process_przetargi] Błąd, ustawiam RESULT_EXCEL=None")
+            RESULT_EXCEL = None
+            PROGRESS = -1
 
-        format_gielda = workbook.add_format({
-            'num_format': '#,##0.00',
-            'bg_color': '#FCF8C8',
-            'align': 'right',
-            'border': 1,
-            'border_color': '#000000'
-        })
-
-        format_hist = workbook.add_format({
-            'num_format': '#,##0.00',
-            'bg_color': '#D2EED5',
-            'align': 'right',
-            'border': 1,
-            'border_color': '#000000'
-        })
-
-        format_default = workbook.add_format({
-            'num_format': '#,##0',
-            'align': 'right',
-            'border': 1,
-            'border_color': '#000000'
-        })
-
-        format_fracht_gielda = workbook.add_format({
-            'num_format': '#,##0',
-            'bg_color': '#F5E737',
-            'align': 'right',
-            'border': 1,
-            'border_color': '#000000'
-        })
-
-        format_koszty = workbook.add_format({
-            'num_format': '#,##0',
-            'bg_color': '#FFC1C1',
-            'align': 'right',
-            'border': 1,
-            'border_color': '#000000'
-        })
-
-        format_koszty_km = workbook.add_format({
-            'num_format': '#,##0.00',
-            'bg_color': '#FFC1C1',
-            'align': 'right',
-            'border': 1,
-            'border_color': '#000000'
-        })
-
-        format_koszty_suma = workbook.add_format({
-            'num_format': '#,##0',
-            'bg_color': '#FF3B3B',
-            'align': 'right',
-            'border': 1,
-            'border_color': '#000000'
-        })
-
-        format_fracht_klient = workbook.add_format({
-            'num_format': '#,##0',
-            'bg_color': '#48BC56',
-            'align': 'right',
-            'border': 1,
-            'border_color': '#000000'
-        })
-
-        text_format = workbook.add_format({
-            'num_format': '@',
-            'align': 'left',
-            'border': 1,
-            'border_color': '#000000'
-        })
-
-        # Nagłówki
-        for col_num, value in enumerate(df_out.columns.values):
-            worksheet.write(0, col_num, value, header_format)
-
-        # Kolumny tekstowe
-        text_columns = [
-            "Kraj zaladunku", "Kod zaladunku", "Miasto zaladunku", "Współrzędne zaladunku",
-            "Jakość geokodowania (zał.)", "Źródło geokodowania (zał.)",
-            "Kraj rozladunku", "Kod rozładunku", "Miasto rozładunku", "Współrzędne rozładunku",
-            "Jakość geokodowania (rozł.)", "Źródło geokodowania (rozł.)",
-            "Dopasowanie (giełda)", "Dopasowanie (Klient)", "Relacja", "Tryb wyznaczania trasy",
-            "Zgodność lokalizacji załadunku", "Zgodność lokalizacji rozładunku", "Uwagi dotyczące współrzędnych",
-            "Koordynaty miasta załadunku", "Koordynaty kodu pocztowego załadunku",
-            "Koordynaty miasta rozładunku", "Koordynaty kodu pocztowego rozładunku",
-            "Region załadunku", "Region rozładunku", "Region - dopasowanie",
-            "Link do mapy"  # Dodano kolumnę z linkiem
-        ]
-
-        # Kolumny stawek giełdy
-        gielda_stawki_columns = [
-            "Giełda_stawka_3m", "Giełda_stawka_6m", "Giełda_stawka_12m",
-            "Region - Giełda stawka 3m", "Region - Giełda stawka 6m", "Region - Giełda stawka 12m"
-        ]
-
-        # Kolumny stawek klienta
-        klient_stawki_columns = [
-            "Klient_stawka_3m", "Klient_stawka_6m", "Klient_stawka_12m",
-            "Region - Klient stawka 3m", "Region - Klient stawka 6m", "Region - Klient stawka 12m"
-        ]
-
-        # Kolumny frachtów giełdy
-        gielda_fracht_columns = [
-            "Giełda - fracht historyczny", "Giełda - fracht proponowany km ładowne",
-            "Giełda - fracht proponowany km całkowite"  # Zmieniona nazwa
-        ]
-
-        # Kolumny frachtów klienta
-        klient_fracht_columns = [
-            "Klient - fracht historyczny", "Klient - fracht proponowany km ładowne",
-            "Klient - fracht proponowany km całkowite"  # Zmieniona nazwa
-        ]
-
-        # Kolumny kosztów
-        koszty_columns = [
-            "opłaty drogowe (EUR)", "Opłaty drogowe/km (EUR)", "Koszt paliwa (EUR)", 
-            "Koszt kierowcy (EUR)", "Opłaty drogowe podlot (EUR)"
-        ]
-
-        # Kolumny dystansów
-        dystans_columns = [
-            "km PTV (tylko ładowne)", "km całkowite z podlotem", "podlot", "km w linii prostej",
-            "Odległość miasto-kod pocztowy załadunku (km)", "Odległość miasto-kod pocztowy rozładunku (km)"
-        ]
-
-        # Mapowanie kolumn na formaty
-        for row in range(1, len(df_out) + 1):
-            for col_num, column in enumerate(df_out.columns):
-                cell_value = df_out.iloc[row - 1, col_num]
-
-                # Obsługa wartości pustych, None lub NaN
-                if cell_value is None or pd.isna(cell_value) or (
-                        isinstance(cell_value, str) and cell_value.strip() == ''):
-                    if column in text_columns:
-                        worksheet.write_blank(row, col_num, None, text_format)
-                    elif column in gielda_stawki_columns:
-                        worksheet.write_blank(row, col_num, None, format_gielda)
-                    elif column in klient_stawki_columns:
-                        worksheet.write_blank(row, col_num, None, format_hist)
-                    elif column in gielda_fracht_columns:
-                        worksheet.write_blank(row, col_num, None, format_fracht_gielda)
-                    elif column in klient_fracht_columns:
-                        worksheet.write_blank(row, col_num, None, format_fracht_klient)
-                    elif column in koszty_columns:
-                        worksheet.write_blank(row, col_num, None, format_koszty)
-                    elif column == "Suma kosztów (EUR)":
-                        worksheet.write_blank(row, col_num, None, format_koszty_suma)
-                    elif column in dystans_columns:
-                        worksheet.write_blank(row, col_num, None, format_default)
-                    else:
-                        worksheet.write_blank(row, col_num, None, format_default)
-                    continue
-
-                # Wybór odpowiedniego formatu na podstawie nazwy kolumny
-                if column in text_columns:
-                    worksheet.write(row, col_num, cell_value, text_format)
-                elif column in gielda_stawki_columns:
-                    try:
-                        val = float(cell_value) if cell_value is not None else None
-                        worksheet.write(row, col_num, val, format_gielda)
-                    except (ValueError, TypeError):
-                        worksheet.write_blank(row, col_num, None, format_gielda)
-                elif column in klient_stawki_columns:
-                    try:
-                        val = float(cell_value) if cell_value is not None else None
-                        worksheet.write(row, col_num, val, format_hist)
-                    except (ValueError, TypeError):
-                        worksheet.write_blank(row, col_num, None, format_hist)
-                elif column in gielda_fracht_columns:
-                    try:
-                        val = float(cell_value) if cell_value is not None else None
-                        worksheet.write(row, col_num, val, format_fracht_gielda)
-                    except (ValueError, TypeError):
-                        worksheet.write_blank(row, col_num, None, format_fracht_gielda)
-                elif column in klient_fracht_columns:
-                    try:
-                        val = float(cell_value) if cell_value is not None else None
-                        worksheet.write(row, col_num, val, format_fracht_klient)
-                    except (ValueError, TypeError):
-                        worksheet.write_blank(row, col_num, None, format_fracht_klient)
-                elif column in koszty_columns:
-                    try:
-                        val = float(cell_value) if cell_value is not None else None
-                        if column == "Opłaty drogowe/km (EUR)":
-                            worksheet.write(row, col_num, val, format_koszty_km)
-                        else:
-                            worksheet.write(row, col_num, val, format_koszty)
-                    except (ValueError, TypeError):
-                        if column == "Opłaty drogowe/km (EUR)":
-                            worksheet.write_blank(row, col_num, None, format_koszty_km)
-                        else:
-                            worksheet.write_blank(row, col_num, None, format_koszty)
-                elif column == "Suma kosztów (EUR)":
-                    try:
-                        val = float(cell_value) if cell_value is not None else None
-                        worksheet.write(row, col_num, val, format_koszty_suma)
-                    except (ValueError, TypeError):
-                        worksheet.write_blank(row, col_num, None, format_koszty_suma)
-                elif column in dystans_columns:
-                    try:
-                        val = float(cell_value) if cell_value is not None else None
-                        worksheet.write(row, col_num, val, format_default)
-                    except (ValueError, TypeError):
-                        worksheet.write_blank(row, col_num, None, format_default)
-                else:
-                    # Domyślny format dla pozostałych kolumn
-                    try:
-                        if isinstance(cell_value, (int, float)):
-                            worksheet.write(row, col_num, cell_value, format_default)
-                        else:
-                            val = float(cell_value) if cell_value is not None else None
-                            worksheet.write(row, col_num, val, format_default)
-                    except (ValueError, TypeError):
-                        worksheet.write_blank(row, col_num, None, format_default)
-
-                    # Dostosowanie szerokości kolumn
-                worksheet.set_column(0, len(df_out.columns) - 1, 15)
-
-                # Dostosowanie szerokości kolumn z długimi nazwami
-                for col_num, column in enumerate(df_out.columns):
-                    if len(column) > 15:
-                        worksheet.set_column(col_num, col_num, len(column) * 0.9)
-
-    buffer.seek(0)
-    global RESULT_EXCEL
-    RESULT_EXCEL = buffer.read()
-    PROGRESS = 100
+    return results
 
 
 def save_caches():
@@ -2864,7 +3129,34 @@ def load_caches():
 
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max-limit
+app.config['SECRET_KEY'] = 'your-secret-key-123'  # Klucz do szyfrowania sesji
 
+# Konfiguracja logowania
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
+
+# Dodanie filtra postępu do loggera
+class FilterProgress(logging.Filter):
+    def filter(self, record):
+        return not record.getMessage().startswith("Progress:")
+
+
+# Zmienne globalne dla postępu przetwarzania
+PROGRESS = 0
+CURRENT_ROW = 0
+TOTAL_ROWS = 0
+PREVIEW_DATA = {'rows': [], 'total_count': 0}
+GEOCODING_CURRENT = 0
+GEOCODING_TOTAL = 0
+PROCESSING_COMPLETE = False
+RESULT_EXCEL = None
 
 @app.route("/show_cache")
 def show_cache():
@@ -2875,49 +3167,86 @@ def show_cache():
 @app.route("/", methods=["GET", "POST"])
 def upload_file():
     if request.method == "POST":
-        file = request.files.get("file")
-        if file:
-            global PROGRESS, RESULT_EXCEL
-            PROGRESS = 0
-            RESULT_EXCEL = None
-            fuel_cost_str = request.form.get("fuel_cost", "0.40")
-            try:
-                fuel_cost = float(fuel_cost_str)
-            except ValueError:
-                fuel_cost = 0.40
-            driver_cost_str = request.form.get("driver_cost", "130")
-            try:
-                driver_cost = float(driver_cost_str)
-            except ValueError:
-                driver_cost = 130
-            file_bytes = io.BytesIO(file.read())
-            file_bytes.seek(0)
-            threading.Thread(target=background_processing, args=(file_bytes, fuel_cost, driver_cost)).start()
+        try:
+            file = request.files.get("file")
+            if not file:
+                return render_template("error.html", message="Nie wybrano pliku")
+
+            # Reset zmiennych globalnych
+            with progress_lock:
+                global PROGRESS, CURRENT_ROW, TOTAL_ROWS, GEOCODING_CURRENT, GEOCODING_TOTAL, PREVIEW_DATA, RESULT_EXCEL, PROCESSING_COMPLETE
+                PROGRESS = 0
+                CURRENT_ROW = 0
+                TOTAL_ROWS = 0
+                GEOCODING_CURRENT = 0
+                GEOCODING_TOTAL = 0
+                PREVIEW_DATA = {'rows': [], 'total_count': 0}
+                RESULT_EXCEL = None
+                PROCESSING_COMPLETE = False
+
+            # Pobierz parametry
+            fuel_cost = float(request.form.get("fuel_cost", 0.40))
+            driver_cost = float(request.form.get("driver_cost", 210))
+
+            # Czytaj plik w kontekście żądania
+            file_bytes = file.read()
+
+            # Uruchom przetwarzanie w tle z bajtami pliku
+            thread = threading.Thread(target=background_processing, args=(file_bytes, fuel_cost, driver_cost))
+            thread.start()
+            
             return render_template("processing.html")
-        return render_template("error.html", message="Nie wybrano pliku")
+        except Exception as e:
+            return render_template("error.html", message=str(e))
     return render_template("upload.html")
 
 
 @app.route("/download")
 def download():
-    if RESULT_EXCEL and len(RESULT_EXCEL) > 100:
-        return send_file(io.BytesIO(RESULT_EXCEL), download_name="wycena.xlsx", as_attachment=True)
-    return "Jeszcze nie gotowe."
+    global PROCESSING_COMPLETE, RESULT_EXCEL
+    with progress_lock:
+        print(f"[/download] PROCESSING_COMPLETE={PROCESSING_COMPLETE}, RESULT_EXCEL={'jest' if RESULT_EXCEL else 'brak'}")
+        if not PROCESSING_COMPLETE:
+            print("[/download] Zwracam: Jeszcze nie gotowe")
+            return "Jeszcze nie gotowe."
+        if not RESULT_EXCEL:
+            print("[/download] Zwracam: Brak wygenerowanego pliku")
+            return "Brak wygenerowanego pliku."
+        if len(RESULT_EXCEL) <= 100:
+            print("[/download] Zwracam: Plik Excel jest nieprawidłowy")
+            return "Plik Excel jest nieprawidłowy."
+        try:
+            print("[/download] Wysyłam plik Excel")
+            return send_file(io.BytesIO(RESULT_EXCEL), download_name="wycena.xlsx", as_attachment=True)
+        except Exception as e:
+            print(f"[/download] Błąd podczas wysyłania pliku: {e}")
+            return "Błąd podczas pobierania pliku."
 
 
 @app.route("/progress")
 def progress():
+    global PROGRESS, CURRENT_ROW, TOTAL_ROWS, PREVIEW_DATA, GEOCODING_CURRENT, GEOCODING_TOTAL, PROCESSING_COMPLETE
+    with progress_lock:
+        # Tworzymy statyczną zmienną dla funkcji progress, aby pamiętać ostatni stan
+        if not hasattr(progress, 'last_state'):
+            progress.last_state = {'progress': -1, 'current': -1, 'total': -1, 'complete': False}
+
     geocoding_progress = 0
     if GEOCODING_TOTAL > 0:
-        geocoding_progress = int((GEOCODING_CURRENT / GEOCODING_TOTAL) * 100)
-    return jsonify(
-        progress=PROGRESS,
-        current=CURRENT_ROW,
-        total=TOTAL_ROWS,
-        geocoding_progress=geocoding_progress,
-        error=PROGRESS == -1 or PROGRESS == -2,
-        preview_data=PREVIEW_DATA
-    )
+        geocoding_progress = min(int((GEOCODING_CURRENT / GEOCODING_TOTAL) * 100), 100)  # Upewnij się, że nie przekracza 100%
+    
+    # Usunięto wyświetlanie postępu w konsoli
+    
+    response_data = {
+        'progress': PROGRESS,
+        'current': CURRENT_ROW,
+        'total': TOTAL_ROWS,
+        'geocoding_progress': geocoding_progress,
+        'error': PROGRESS == -1 or PROGRESS == -2,
+        'preview_data': PREVIEW_DATA,
+        'processing_complete': PROCESSING_COMPLETE
+    }
+    return jsonify(response_data)
 
 
 @app.route("/save_cache")
@@ -2931,6 +3260,10 @@ def ptv_stats():
     return jsonify(stats)
 
 
+@app.route("/upload_for_geocoding")
+def upload_for_geocoding():
+    return render_template("upload_for_geocoding.html")
+
 @app.route("/ungeocoded_locations", methods=["GET", "POST"])
 def ungeocoded_locations():
     if request.method == "POST":
@@ -2939,14 +3272,37 @@ def ungeocoded_locations():
             if not file:
                 return render_template("error.html", message="Nie wybrano pliku")
 
-            df = pd.read_excel(file)
-            ungeocoded = get_ungeocoded_locations(df)
-            return render_template("ungeocoded_locations.html", ungeocoded=ungeocoded)
-
+            # Wczytaj dane z Excela, zachowując kody pocztowe jako tekst
+            df = pd.read_excel(
+                file,
+                dtype={
+                    'kod pocztowy zaladunku': str,
+                    'kod pocztowy rozladunku': str,
+                    'kod_pocztowy_zaladunku': str,
+                    'kod_pocztowy_rozladunku': str
+                }
+            )
+            print("Kolumny w pliku Excel:", df.columns.tolist())
+            
+            locations_data = get_all_locations_status(df)
+            print("Znalezione lokalizacje:")
+            print(f"Poprawne: {len(locations_data['correct_locations'])}")
+            print(f"Do weryfikacji: {len(locations_data['locations'])}")
+            
+            # Zapisz dane w sesji
+            session['locations_data'] = locations_data
+            
+            return render_template(
+                "ungeocoded_locations.html",
+                locations_data=locations_data
+            )
         except Exception as e:
-            return render_template("error.html", message=str(e))
-    else:
-        return render_template("upload_for_geocoding.html")
+            print(f"Błąd podczas przetwarzania pliku: {str(e)}")
+            return render_template("error.html", message=f"Błąd podczas przetwarzania pliku: {str(e)}")
+    
+    # Dla GET, spróbuj pobrać dane z sesji
+    locations_data = session.get('locations_data')
+    return render_template("ungeocoded_locations.html", locations_data=locations_data)
 
 
 @app.route("/save_manual_coordinates", methods=['POST'])
@@ -3006,32 +3362,41 @@ def test_route_result():
 
 @app.route("/test_truck_route")
 def test_truck_route():
-    coord_from = request.args.get('from', '50.433792,7.466426')
-    coord_to = request.args.get('to', '48.237324,13.824039')
-    routing_mode = request.args.get('mode', DEFAULT_ROUTING_MODE)
-    fuel_cost = float(request.args.get('fuel_cost', '0.40'))  # Domyślny koszt paliwa
-    driver_cost = float(request.args.get('driver_cost', '130'))  # Domyślny koszt kierowcy
+    coord_from = request.args.get('coord_from')
+    coord_to = request.args.get('coord_to')
+    
+    # Pobierz kody pocztowe i kraje z parametrów URL
+    load_country = request.args.get('load_country')
+    load_postal = request.args.get('load_postal')
+    unload_country = request.args.get('unload_country')
+    unload_postal = request.args.get('unload_postal')
+    
+    if not coord_from or not coord_to:
+        return jsonify({'error': 'Brak współrzędnych'})
     
     try:
-        lat1, lon1 = map(float, coord_from.split(','))
-        lat2, lon2 = map(float, coord_to.split(','))
+        coord_from = tuple(map(float, coord_from.split(',')))
+        coord_to = tuple(map(float, coord_to.split(',')))
         
-        # Użyj tej samej funkcji co w procesie Excel
-        result = get_route_distance([lat1, lon1], [lat2, lon2], avoid_switzerland=True, routing_mode=routing_mode)
+        result = get_route_distance(coord_from, coord_to, 
+                                loading_country=load_country, unloading_country=unload_country)
+        if not result:
+            return jsonify({'error': 'Nie udało się wyznaczyć trasy'})
         
-        if result:
-            # Pobierz dist_ptv tak samo jak w procesie Excel
-            if isinstance(result, dict) and 'distance' in result:
-                dist = result['distance']
-            else:
-                dist = result
-            travel_time = (dist / 80) * 60 if dist else 0
-            
-            # Oblicz koszt paliwa
-            fuel_cost_value = dist * fuel_cost
-            
-            # Oblicz koszt kierowcy na podstawie dystansu, tak jak w procesie Excel
-            driver_days = None
+        dist = result.get('distance', 0)
+        polyline = result.get('polyline', '')
+        road_toll = result.get('road_toll', 0)  # Standardowe opłaty drogowe
+        other_toll = result.get('other_toll', 0)  # Opłaty za tunele/mosty/promy
+        total_toll = road_toll + other_toll
+        toll_details = result.get('toll_details', {})
+        
+        # Obliczanie kosztu paliwa (domyślnie 0.40 EUR/km)
+        fuel_cost = 0.40
+        fuel_cost_value = dist * fuel_cost if dist is not None else None
+        
+        # Obliczanie kosztu kierowcy według tej samej logiki co w głównej aplikacji
+        driver_cost = 210  # Domyślny koszt kierowcy na dzień
+        if dist is not None:
             if dist <= 350:
                 driver_days = 1
             elif 351 <= dist <= 500:
@@ -3050,69 +3415,84 @@ def test_truck_route():
                 driver_days = 6
             else:
                 driver_days = None
-                
-            driver_cost_value = driver_days * driver_cost if driver_days is not None else None
-            
-            # Pobierz informacje o opłatach drogowych
-            toll_details = result.get('toll_details', {})
-            total_toll = result.get('toll_cost', 0)
-            toll_text = "\n".join([f"{country}: {cost}€" for country, cost in toll_details.items()])
-            toll_per_km = total_toll / dist if dist > 0 else 0
-            
-            # Oblicz koszt podlotu (tak samo jak w procesie Excel)
-            podlot = 100  # domyślna wartość podlotu w km
-            oplaty_drogowe_podlot = podlot * 0.30 if podlot is not None else None
-
-            # Oblicz sumę kosztów
-            suma_kosztow = 0
-            for cost in [total_toll, fuel_cost_value, driver_cost_value, oplaty_drogowe_podlot]:
-                if cost is not None:
-                    suma_kosztow += cost
-            
-            # Lista krajów na trasie
-            countries = list(toll_details.keys()) if toll_details else ["Brak informacji o krajach"]
-            
-            # Pobierz polyline z odpowiedzi PTV i przekształć na format GeoJSON
-            polyline = ''
-            if isinstance(result, dict) and 'polyline' in result:
-                polyline = result['polyline']
-                # Jeśli to nie jest format GeoJSON, przekształć na niego
-                if not polyline.startswith('{"type":'):
-                    try:
-                        # Dekoduj polyline do listy punktów
-                        points = decode_polyline(polyline)
-                        # Przekształć na format GeoJSON
-                        polyline = json.dumps({
-                            "type": "LineString",
-                            "coordinates": [[point[1], point[0]] for point in points]
-                        })
-                    except Exception as e:
-                        print(f"Błąd podczas konwersji polyline: {e}")
-
-            return jsonify({
-                'status': 'success',
-                'dystans_km': round(dist, 1),
-                'czas_min': round(travel_time, 0),
-                'koszt_paliwa': round(fuel_cost_value, 2),
-                'koszt_kierowcy': round(driver_cost_value, 2),
-                'oplaty_drogowe_szczegoly': toll_text,
-                'suma_oplat_drogowych': round(total_toll, 2),
-                'oplaty_km': round(toll_per_km, 3),
-                'oplaty_drogowe_podlot': round(oplaty_drogowe_podlot, 2) if oplaty_drogowe_podlot is not None else None,
-                'suma_kosztow': round(suma_kosztow, 2),
-                'kraje': countries,
-                'polyline': polyline
-            })
         else:
-            return jsonify({
-                'status': 'error',
-                'message': "Nie udało się obliczyć trasy"
-            })
+            driver_days = None
+            
+        driver_cost_value = driver_days * driver_cost if driver_days is not None else None
+        
+        # Przygotuj tekst z opisem opłat drogowych
+        toll_text = "Opłaty drogowe według krajów:\n"
+        toll_text += "\n".join([f"{country}: {format_currency(cost)}€" for country, cost in toll_details.items()])
+        toll_text += f"\n\nOpłaty drogowe: {format_currency(road_toll)}€"
+        if other_toll > 0:
+            toll_text += f"\nDodatkowe opłaty (tunele/mosty/promy): {format_currency(other_toll)}€"
+        
+        # Oblicz koszt opłat na kilometr (tylko standardowe opłaty)
+        toll_per_km = road_toll / dist if dist > 0 else 0
+        
+        # Przygotuj listę krajów
+        countries = list(toll_details.keys()) if toll_details else ["Brak informacji o krajach"]
+            
+        # Stwórz link do mapy
+        map_link = create_google_maps_link(coord_from, coord_to, polyline)
+        
+        # Pobierz standardowe stawki i sprawdź czy jest historyczny podlot
+        rates = get_all_rates(load_country, load_postal, unload_country, unload_postal, coord_from, coord_to)
+        
+        # Pobierz podlot z danych historycznych lub użyj wartości domyślnej
+        podlot = rates.get('podlot_historyczny')
+        if podlot is None:
+            podlot = 100  # domyślnie 100 km jeśli brak danych historycznych
+        
+        oplaty_drogowe_podlot = podlot * 0.30  # 0.30 EUR/km
+        
+        # Oblicz sumę kosztów
+        suma_kosztow = 0
+        for cost in [road_toll, fuel_cost_value, driver_cost_value, other_toll, oplaty_drogowe_podlot]:
+            if cost is not None:
+                suma_kosztow += cost
+                
+        # Pobierz stawki regionalne
+        # Jeśli mamy przekazane kody pocztowe i kraje, użyj ich
+        if load_country and load_postal and unload_country and unload_postal:
+            # Użyj przekazanych danych
+            region_rates = get_region_based_rates(load_country, load_postal, unload_country, unload_postal)
+        else:
+            # Fallback - użyj krajów z trasy i przykładowych kodów pocztowych
+            load_country_fallback = countries[0] if countries and countries[0] != "Brak informacji o krajach" else "Poland"
+            load_postal_fallback = "00-001"  # Przykładowy kod pocztowy
+            unload_country_fallback = countries[-1] if len(countries) > 1 and countries[-1] != "Brak informacji o krajach" else "Germany"
+            unload_postal_fallback = "10115"  # Przykładowy kod pocztowy
+            region_rates = get_region_based_rates(load_country_fallback, load_postal_fallback, unload_country_fallback, unload_postal_fallback)
+        
+        # Przygotuj odpowiedź JSON
+        response = {
+            'distance': round(dist, 2),
+            'polyline': polyline,
+            'podlot': podlot,  # Dodajemy wartość podlotu
+            'oplaty_drogowe': format_currency(road_toll),
+            'oplaty_dodatkowe': format_currency(other_toll),
+            'oplaty_na_km': format_currency(toll_per_km),
+            'koszt_paliwa': format_currency(fuel_cost_value),
+            'koszt_kierowcy': format_currency(driver_cost_value),
+            'oplaty_drogowe_podlot': format_currency(oplaty_drogowe_podlot),
+            'suma_kosztow': format_currency(suma_kosztow),
+            'kraje': countries,
+            'szczegoly_oplat': toll_text,
+            'map_link': map_link,
+            'region_klient_stawka_3m': format_currency(region_rates.get('region_klient_stawka_3m')),
+            'region_klient_stawka_6m': format_currency(region_rates.get('region_klient_stawka_6m')),
+            'region_klient_stawka_12m': format_currency(region_rates.get('region_klient_stawka_12m')),
+            'region_gielda_stawka_3m': format_currency(region_rates.get('region_gielda_stawka_3m')),
+            'region_gielda_stawka_6m': format_currency(region_rates.get('region_gielda_stawka_6m')),
+            'region_gielda_stawka_12m': format_currency(region_rates.get('region_gielda_stawka_12m')),
+            'region_relacja': region_rates.get('region_relacja', ''),
+            'region_dopasowanie': region_rates.get('region_dopasowanie', '')
+        }
+        
+        return jsonify(response)
     except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': f"Błąd: {str(e)}"
-        })
+        return jsonify({'error': str(e)})
 
 @app.route("/test_truck_route_form")
 def test_truck_route_form():
@@ -3135,8 +3515,13 @@ def test_truck_route_map():
         to_coords = [float(x) for x in to_coords.split(',')]
         
         # Pobierz trasę z PTV
-        route_result = get_route_distance(from_coords, to_coords, avoid_switzerland=True,
-                                        routing_mode=DEFAULT_ROUTING_MODE)
+        # Pobierz kraje z parametrów URL
+        load_country = request.args.get('load_country')
+        unload_country = request.args.get('unload_country')
+        
+        route_result = get_route_distance(from_coords, to_coords, 
+                                        loading_country=load_country, unloading_country=unload_country,
+                                        avoid_switzerland=True, routing_mode=DEFAULT_ROUTING_MODE)
         
         # Wyciągnij polyline z wyniku
         polyline = route_result.get('polyline', '') if isinstance(route_result, dict) else ''
@@ -3151,28 +3536,186 @@ def test_truck_route_map():
         route_logger.error(f"Błąd podczas generowania linku do mapy: {str(e)}")
         return f"Błąd: {str(e)}", 500
 
-def background_processing(file_stream, fuel_cost, driver_cost):
-    global RESULT_EXCEL, PROGRESS
+def background_processing(file_bytes, fuel_cost, driver_cost):
+    global PROGRESS, PROCESSING_COMPLETE, RESULT_EXCEL, CURRENT_ROW, TOTAL_ROWS, PREVIEW_DATA, GEOCODING_CURRENT, GEOCODING_TOTAL
+    
+    # Resetuj wszystkie zmienne globalne na początku
+    with progress_lock:
+        print("[background_processing] Resetuję zmienne globalne")
+        PROGRESS = 0
+        PROCESSING_COMPLETE = False
+        RESULT_EXCEL = None
+        CURRENT_ROW = 0
+        TOTAL_ROWS = 0
+        PREVIEW_DATA = {'rows': [], 'total_count': 0}
+        GEOCODING_CURRENT = 0
+        GEOCODING_TOTAL = 0
+    
     try:
         print("Rozpoczynam przetwarzanie pliku...")
+        # Użyj bezpośrednio bajtów pliku
+        file_stream = io.BytesIO(file_bytes)
         df = pd.read_excel(file_stream, dtype=str)
         df.columns = df.columns.str.lower().str.replace(" ", "_").str.strip()
         print("Przekształcone kolumny:", list(df.columns))
+        
         try:
             process_przetargi(df, fuel_cost, driver_cost)
             save_caches()
             print("Przetwarzanie zakończone.")
+            with progress_lock:
+                print("[background_processing] Ustawiam PROCESSING_COMPLETE=True i PROGRESS=100")
+                PROCESSING_COMPLETE = True
+                if PROGRESS != -1 and PROGRESS != -2:  # Nie zmieniaj PROGRESS jeśli wystąpił błąd
+                    PROGRESS = 100
+        
         except GeocodeException as ge:
-            PROGRESS = -2
+            with progress_lock:
+                print("[background_processing] GeocodeException: Ustawiam PROGRESS=-2 i PROCESSING_COMPLETE=True")
+                PROGRESS = -2
+                PROCESSING_COMPLETE = True
             print(f"Znaleziono {len(ge.ungeocoded_locations)} nierozpoznanych lokalizacji")
+        
+        except Exception as e:
+            print(f"Błąd w process_przetargi: {e}")
+            with progress_lock:
+                print("[background_processing] Błąd: Ustawiam PROGRESS=-1, PROCESSING_COMPLETE=True i RESULT_EXCEL=None")
+                PROGRESS = -1
+                PROCESSING_COMPLETE = True
+                RESULT_EXCEL = None
     except Exception as e:
         print(f"Błąd przetwarzania: {e}")
-        PROGRESS = -1
+        with progress_lock:
+            print("[background_processing] Błąd: Ustawiam PROGRESS=-1, PROCESSING_COMPLETE=True i RESULT_EXCEL=None")
+            PROGRESS = -1
+            PROCESSING_COMPLETE = True
+            RESULT_EXCEL = None
 
+@app.route("/check_locations", methods=["POST"])
+def check_locations():
+    try:
+        file = request.files.get("file")
+        if not file:
+            return jsonify({"error": "Nie wybrano pliku"})
+
+        # Wczytaj plik Excel
+        df = pd.read_excel(file)
+        
+        # Zbierz unikalne lokalizacje
+        unique_locations = set()
+        for _, row in df.iterrows():
+            city_load = row.get('miasto zaladunku', '')
+            if not isinstance(city_load, str):
+                city_load = ''
+            city_unload = row.get('miasto rozladunku', '')
+            if not isinstance(city_unload, str):
+                city_unload = ''
+            unique_locations.add((
+                row['kraj zaladunku'],
+                str(row['kod pocztowy zaladunku']).strip(),
+                city_load.strip()
+            ))
+            unique_locations.add((
+                row['kraj rozladunku'],
+                str(row['kod pocztowy rozladunku']).strip(),
+                city_unload.strip()
+            ))
+
+        # Sprawdź każdą lokalizację
+        correct_locations = []
+        incorrect_locations = []
+        
+        for country, postal_code, city in unique_locations:
+            coords = get_coordinates(country, postal_code, city)
+            if coords and coords[0] is not None and coords[1] is not None:
+                correct_locations.append({
+                    'country': country,
+                    'postal_code': postal_code,
+                    'city': city
+                })
+            else:
+                incorrect_locations.append({
+                    'country': country,
+                    'postal_code': postal_code,
+                    'city': city
+                })
+
+        return jsonify({
+            'total_locations': len(unique_locations),
+            'correct_locations': len(correct_locations),
+            'incorrect_locations': len(incorrect_locations),
+            'incorrect_details': incorrect_locations
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+@app.route("/update_coordinates", methods=["POST"])
+def update_coordinates():
+    try:
+        data = request.get_json()
+        location_id = data.get('location_id')
+        latitude = data.get('latitude')
+        longitude = data.get('longitude')
+        
+        if not all([location_id, latitude, longitude]):
+            return jsonify({'success': False, 'error': 'Brak wymaganych danych'})
+            
+        # Znajdź lokalizację w pamięci
+        locations_data = session.get('locations_data', {})
+        ungeocoded = locations_data.get('locations', [])
+        geocoded = locations_data.get('correct_locations', [])
+        
+        # Szukaj lokalizacji do aktualizacji
+        location = None
+        for loc in ungeocoded:
+            if str(loc['id']) == str(location_id):
+                location = loc
+                break
+                
+        if not location:
+            return jsonify({'success': False, 'error': 'Nie znaleziono lokalizacji'})
+            
+        # Aktualizuj współrzędne w geo_cache
+        key = location['key']
+        coords = (float(latitude), float(longitude))
+        geo_cache[key] = (*coords, 'manual', 'manual verification')
+        
+        # Przenieś lokalizację z ungeocoded do geocoded
+        location['coords'] = f"{latitude},{longitude}"
+        ungeocoded.remove(location)
+        geocoded.append(location)
+        
+        # Aktualizuj dane w sesji
+        locations_data['locations'] = ungeocoded
+        locations_data['correct_locations'] = geocoded
+        session['locations_data'] = locations_data
+        
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        print(f"Błąd podczas aktualizacji współrzędnych: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)})
+
+def is_route_to_or_from_switzerland(loading_country, unloading_country):
+    """
+    Sprawdza czy trasa jest do lub ze Szwajcarii na podstawie kodów krajów.
+    """
+    normalized_loading = normalize_country(loading_country)
+    normalized_unloading = normalize_country(unloading_country)
+    return normalized_loading == 'Switzerland' or normalized_unloading == 'Switzerland'
+
+def get_route_distance(coord_from, coord_to, loading_country=None, unloading_country=None, avoid_switzerland=True, routing_mode=DEFAULT_ROUTING_MODE):
+    # Jeśli trasa jest do/ze Szwajcarii, nie unikamy Szwajcarii
+    if loading_country and unloading_country:
+        if is_route_to_or_from_switzerland(loading_country, unloading_country):
+            avoid_switzerland = False
+    
+    result = ptv_manager.get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
+    return result
 
 if __name__ == '__main__':
     load_caches()
-    load_region_mapping()  # Dodaj tę linię, aby wczytać mapowania regionów
     log = logging.getLogger('werkzeug')
 
 
@@ -3182,4 +3725,4 @@ if __name__ == '__main__':
 
 
     log.addFilter(FilterProgress())
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0')

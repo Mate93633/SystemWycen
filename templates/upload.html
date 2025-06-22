@@ -1,28 +1,63 @@
 {% extends "base.html" %}
 
-{% block title %}Wgrywanie pliku wycen{% endblock %}
+{% block title %}Wycena Transportu - Wgrywanie pliku{% endblock %}
 
 {% block content %}
-    <h1>Wgrywanie pliku Excel z przetargami</h1>
-    
-    <form method="post" enctype="multipart/form-data" class="form">
-        <div class="form-group">
-            <label for="file">Plik Excel:</label>
-            <input type="file" id="file" name="file" accept=".xlsx,.xls" required>
+<div class="card">
+    <div class="card-header">
+        <div>
+            <i class="fas fa-upload"></i> Wgrywanie pliku Excel
         </div>
-        
-        <div class="form-group">
-            <label for="fuel_cost">Koszt paliwa (€/km):</label>
-            <input type="number" id="fuel_cost" name="fuel_cost" step="0.01" value="0.40" required>
+    </div>
+    <div class="card-body">
+        <div class="alert alert-info">
+            <i class="fas fa-info-circle"></i> Plik Excel powinien zawierać kolumny: kraj zaladunku, kod pocztowy zaladunku, miasto zaladunku, kraj rozladunku, kod pocztowy rozladunku, miasto rozladunku
         </div>
-        
-        <div class="form-group">
-            <label for="driver_cost">Koszt kierowcy (€/dzień):</label>
-            <input type="number" id="driver_cost" name="driver_cost" step="0.01" value="130" required>
+
+        <form action="/" method="post" enctype="multipart/form-data" class="mb-3">
+            <div class="form-group">
+                <label for="file" class="form-label">Wybierz plik Excel:</label>
+                <input type="file" name="file" id="file" class="form-control" accept=".xlsx,.xls" required>
+            </div>
+
+            <div class="d-flex">
+                <div class="form-group" style="flex: 1; margin-right: 15px;">
+                    <label for="fuel_cost" class="form-label">Koszt paliwa (€/km):</label>
+                    <input type="number" name="fuel_cost" id="fuel_cost" class="form-control" value="0.40" step="0.01" min="0" required>
+                </div>
+
+                <div class="form-group" style="flex: 1;">
+                    <label for="driver_cost" class="form-label">Koszt kierowcy + leasing (€/dzień):</label>
+                    <input type="number" name="driver_cost" id="driver_cost" class="form-control" value="210" step="1" min="0" required>
+                </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary">
+                <i class="fas fa-paper-plane"></i> Oblicz
+            </button>
+        </form>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                <i class="fas fa-info-circle"></i> Dostępne funkcje
+            </div>
+            <div class="card-body">
+                <div class="d-flex flex-column">
+                    <a href="/test_route_form" class="btn btn-secondary mb-3">
+                        <i class="fas fa-route"></i> Wycena pojedynczej trasy
+                    </a>
+                    <a href="/test_truck_route_form" class="btn btn-secondary mb-3">
+                        <i class="fas fa-truck-moving"></i> W trakcie testów...
+                    </a>
+                    <a href="/ungeocoded_locations" class="btn btn-secondary mb-3">
+                        <i class="fas fa-map-marker-alt"></i> Geokodowanie lokalizacji
+                    </a>
+                    <a href="/save_cache" class="btn btn-secondary">
+                        <i class="fas fa-save"></i> Zapisz pamięć podręczną
+                    </a>
+                </div>
+            </div>
         </div>
-        
-        <div class="form-group">
-            <button type="submit">Rozpocznij przetwarzanie</button>
-        </div>
-    </form>
+    </div>
+</div>
 {% endblock %}

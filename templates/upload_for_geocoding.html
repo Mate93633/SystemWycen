@@ -2,17 +2,129 @@
 
 {% block title %}Wgrywanie pliku{% endblock %}
 
+{% block head %}
+<style>
+.stats-card {
+    transition: transform 0.2s;
+    border: none;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    min-height: 100px;
+    margin-bottom: 0;
+}
+
+.stats-card:hover {
+    transform: translateY(-5px);
+}
+
+.stats-icon {
+    font-size: 1.25rem;
+    margin-bottom: 0.25rem;
+}
+
+.stats-number {
+    font-size: 1.5rem;
+    font-weight: bold;
+    margin: 0.15rem 0;
+}
+
+.table-hover tbody tr:hover {
+    background-color: rgba(0,0,0,0.05);
+    cursor: pointer;
+}
+
+.status-badge {
+    padding: 0.5rem 1rem;
+    border-radius: 20px;
+    font-weight: 500;
+}
+
+.card-header {
+    border-bottom: 3px solid #343a40;
+}
+
+.alert-custom-info {
+    background-color: #e3f2fd;
+    border-left: 5px solid #2196f3;
+    padding: 1rem;
+}
+
+.alert-custom-warning {
+    background-color: #fff3e0;
+    border-left: 5px solid #ff9800;
+    padding: 1rem;
+}
+
+.location-icon {
+    margin-right: 0.5rem;
+    color: #666;
+}
+
+.upload-btn {
+    padding: 0.75rem 1.5rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.upload-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.card-body {
+    padding: 0.75rem;
+}
+
+.stats-total {
+    background: linear-gradient(45deg, #78a1bb, #a5cae4);
+}
+
+.stats-correct {
+    background: linear-gradient(45deg, #27ae60, #2ecc71);
+}
+
+.stats-incorrect {
+    background: linear-gradient(45deg, #f39c12, #f1c40f);
+}
+
+.row.g-4 {
+    margin: -0.25rem;
+}
+
+.row.g-4 > [class*="col-"] {
+    padding: 0.25rem;
+}
+
+.stats-card .card-title {
+    font-size: 0.85rem;
+    margin-bottom: 0.15rem;
+}
+
+#results {
+    margin-top: 2rem !important;
+}
+
+#incorrectLocationsTable {
+    margin-top: 1.5rem !important;
+}
+</style>
+{% endblock %}
+
 {% block content %}
-    <h1>Wgraj plik Excel, aby sprawdzić nierozpoznane lokalizacje</h1>
-    
-    <form method="post" enctype="multipart/form-data" class="form">
-        <div class="form-group">
-            <label for="file">Wybierz plik Excel:</label>
-            <input type="file" id="file" name="file" accept=".xlsx,.xls" required>
-        </div>
-        
-        <div class="form-group">
-            <button type="submit" class="button">Prześlij</button>
-        </div>
-    </form>
+<div class="card">
+    <div class="card-header">
+        <i class="fas fa-upload"></i> Wgrywanie pliku do geokodowania
+    </div>
+    <div class="card-body">
+        <form method="post" action="/ungeocoded_locations" enctype="multipart/form-data">
+            <div class="mb-3">
+                <label for="file" class="form-label">Wybierz plik Excel:</label>
+                <input type="file" class="form-control" id="file" name="file" accept=".xlsx,.xls" required>
+            </div>
+            <button type="submit" class="btn btn-primary upload-btn">
+                <i class="fas fa-upload"></i> Sprawdź lokalizacje
+            </button>
+        </form>
+    </div>
+</div>
 {% endblock %} 

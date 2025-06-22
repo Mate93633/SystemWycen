@@ -7,6 +7,40 @@
     
     <form class="form">
         <div class="form-group">
+            <label for="load_country">Kraj załadunku:</label>
+            <select id="load_country" name="load_country">
+                <option value="Poland">Polska</option>
+                <option value="Germany">Niemcy</option>
+                <option value="France">Francja</option>
+                <option value="Switzerland">Szwajcaria</option>
+                <option value="Austria">Austria</option>
+                <option value="Czech Republic">Czechy</option>
+                <option value="Slovakia">Słowacja</option>
+                <option value="Hungary">Węgry</option>
+                <option value="Italy">Włochy</option>
+                <option value="Netherlands">Holandia</option>
+                <option value="Belgium">Belgia</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="unload_country">Kraj rozładunku:</label>
+            <select id="unload_country" name="unload_country">
+                <option value="Poland">Polska</option>
+                <option value="Germany">Niemcy</option>
+                <option value="France">Francja</option>
+                <option value="Switzerland">Szwajcaria</option>
+                <option value="Austria">Austria</option>
+                <option value="Czech Republic">Czechy</option>
+                <option value="Slovakia">Słowacja</option>
+                <option value="Hungary">Węgry</option>
+                <option value="Italy">Włochy</option>
+                <option value="Netherlands">Holandia</option>
+                <option value="Belgium">Belgia</option>
+            </select>
+        </div>
+
+        <div class="form-group">
             <label for="from">Punkt początkowy (szerokość,długość):</label>
             <input type="text" id="from" name="from" value="50.433792,7.466426" placeholder="np. 50.433792,7.466426">
         </div>
@@ -45,13 +79,15 @@
         const to = document.getElementById('to').value;
         const mode = document.getElementById('routingMode').value;
         const avoid = document.getElementById('avoid_switzerland').checked;
+        const loadCountry = document.getElementById('load_country').value;
+        const unloadCountry = document.getElementById('unload_country').value;
         
         const resultDiv = document.getElementById('result');
         resultDiv.style.display = 'block';
         resultDiv.className = 'alert';
         resultDiv.innerHTML = '<p>⏳ Obliczanie trasy...</p>';
         
-        fetch(`/test_truck_route?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&mode=${encodeURIComponent(mode)}&avoid=${avoid}`)
+        fetch(`/test_truck_route?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&mode=${encodeURIComponent(mode)}&avoid=${avoid}&load_country=${encodeURIComponent(loadCountry)}&unload_country=${encodeURIComponent(unloadCountry)}`)
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'success') {
