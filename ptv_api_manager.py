@@ -10,6 +10,8 @@ import traceback
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+DEFAULT_ROUTING_MODE = "FAST"
+
 class PTVRequestQueue:
     def __init__(self, api_key, max_requests_per_second=10):
         self.queue = Queue()
@@ -72,7 +74,7 @@ class RouteCacheManager:
             routing_mode,
         )
 
-    def get(self, coord_from, coord_to, avoid_switzerland=False, routing_mode="FAST"):
+    def get(self, coord_from, coord_to, avoid_switzerland=False, routing_mode=DEFAULT_ROUTING_MODE):
         with self.lock:
             key = self._generate_key(coord_from, coord_to, avoid_switzerland, routing_mode)
             if key in self.cache:
@@ -85,7 +87,7 @@ class RouteCacheManager:
             self.stats['misses'] += 1
             return None
 
-    def set(self, coord_from, coord_to, data, avoid_switzerland=False, routing_mode="FAST"):
+    def set(self, coord_from, coord_to, data, avoid_switzerland=False, routing_mode=DEFAULT_ROUTING_MODE):
         with self.lock:
             key = self._generate_key(coord_from, coord_to, avoid_switzerland, routing_mode)
             self.cache[key] = {
@@ -109,7 +111,7 @@ class PTVRouteManager:
         self.request_queue = PTVRequestQueue(api_key, max_requests_per_second)
         self.cache_manager = RouteCacheManager(cache_duration)
 
-    def get_routes_batch(self, routes, avoid_switzerland=False, routing_mode="FAST"):
+    def get_routes_batch(self, routes, avoid_switzerland=False, routing_mode=DEFAULT_ROUTING_MODE):
         """Przetwarza wiele tras w jednym wywołaniu"""
         results = {}
         batch_size = 5
@@ -152,7 +154,8 @@ class PTVRouteManager:
                             'other_toll': (toll_info['costs_by_type']['TUNNEL']['EUR'] +
                                          toll_info['costs_by_type']['BRIDGE']['EUR'] +
                                          toll_info['costs_by_type']['FERRY']['EUR']),
-                            'toll_details': toll_info['total_cost_by_country']
+                            'toll_details': toll_info['total_cost_by_country'],
+                            'special_systems': toll_info['special_systems']
                         }
                         
                         results[route_key] = result
@@ -167,7 +170,7 @@ class PTVRouteManager:
         
         return results
 
-    def get_route_distance(self, coord_from, coord_to, avoid_switzerland=False, routing_mode="FAST"):
+    def get_route_distance(self, coord_from, coord_to, avoid_switzerland=False, routing_mode=DEFAULT_ROUTING_MODE):
         # Sprawdź cache
         cached_result = self.cache_manager.get(coord_from, coord_to, avoid_switzerland, routing_mode)
         if cached_result is not None:
@@ -240,7 +243,8 @@ Parametry:
                                 'other_toll': (toll_info['costs_by_type']['TUNNEL']['EUR'] +
                                              toll_info['costs_by_type']['BRIDGE']['EUR'] +
                                              toll_info['costs_by_type']['FERRY']['EUR']),
-                                'toll_details': toll_info['total_cost_by_country']
+                                'toll_details': toll_info['total_cost_by_country'],
+                                'special_systems': toll_info['special_systems']
                             }
                             
                             # Zapisz w cache
@@ -287,7 +291,8 @@ Próbuję bez unikania Szwajcarii...
                                     'other_toll': (toll_info['costs_by_type']['TUNNEL']['EUR'] +
                                                  toll_info['costs_by_type']['BRIDGE']['EUR'] +
                                                  toll_info['costs_by_type']['FERRY']['EUR']),
-                                    'toll_details': toll_info['total_cost_by_country']
+                                    'toll_details': toll_info['total_cost_by_country'],
+                                    'special_systems': toll_info['special_systems']
                                 }
                                 
                                 # Zapisz w cache z avoid_switzerland=False
@@ -430,11 +435,14 @@ Parametry: {params}
                 'TUNNEL': {'EUR': 0},
                 'BRIDGE': {'EUR': 0},
                 'FERRY': {'EUR': 0}
-            }
+            },
+            'special_systems': []  # Lista systemów specjalnych (tunele, mosty, promy)
         }
         
         if not toll_data:
             return result
+            
+        total_cost = 0
 
         # Pobierz całkowity koszt i koszty według krajów
         if 'costs' in toll_data:
@@ -453,48 +461,150 @@ Parametry: {params}
         tunnel_toll = 0
         bridge_toll = 0
         ferry_toll = 0
+        
+        # Słownik do mapowania nazw systemów do kosztów z sekcji
+        system_name_to_cost = {}
 
         # Najpierw sprawdź sekcje
         for section in toll_data.get('sections', []):
             section_cost = section.get('costs', [{}])[0].get('convertedPrice', {}).get('price', 0)
             section_type = section.get('tollRoadType', '').upper()
+            section_name = section.get('name')
+            print(f"DEBUG section: name='{section_name}', type='{section_type}', cost={section_cost}")
             
             if section_type == 'TUNNEL':
                 tunnel_toll += section_cost
+                # Zapisz koszt dla tuneli, nawet jeśli nie ma nazwy sekcji
+                # Nazwa może być w systemach
+                if section_cost > 0:
+                    # Spróbuj znaleźć odpowiadający system na podstawie kosztu
+                    for sys in toll_data.get('systems', []):
+                        sys_name = sys.get('name', '')
+                        if 'TUNNEL' in sys_name.upper() or 'MONT-BLANC' in sys_name.upper():
+                            system_name_to_cost[sys_name] = section_cost
+                            break
+                # Dodaj tylko jeśli ma rzeczywistą nazwę
+                if section_name:
+                    system_name_to_cost[section_name] = section_cost
+                    result['special_systems'].append({
+                        'name': section_name,
+                        'type': 'TUNNEL',
+                        'cost': section_cost,
+                        'operator': section.get('operatorName', '')
+                    })
             elif section_type == 'BRIDGE':
                 bridge_toll += section_cost
+                # Zapisz koszt dla mostów, nawet jeśli nie ma nazwy sekcji
+                if section_cost > 0:
+                    for sys in toll_data.get('systems', []):
+                        sys_name = sys.get('name', '')
+                        if 'BRIDGE' in sys_name.upper():
+                            system_name_to_cost[sys_name] = section_cost
+                            break
+                # Dodaj tylko jeśli ma rzeczywistą nazwę
+                if section_name:
+                    system_name_to_cost[section_name] = section_cost
+                    result['special_systems'].append({
+                        'name': section_name,
+                        'type': 'BRIDGE',
+                        'cost': section_cost,
+                        'operator': section.get('operatorName', '')
+                    })
             elif section_type == 'FERRY':
                 ferry_toll += section_cost
+                # Zapisz koszt dla promów, nawet jeśli nie ma nazwy sekcji
+                if section_cost > 0:
+                    for sys in toll_data.get('systems', []):
+                        sys_name = sys.get('name', '')
+                        if 'FERRY' in sys_name.upper():
+                            system_name_to_cost[sys_name] = section_cost
+                            break
+                # Dodaj tylko jeśli ma rzeczywistą nazwę
+                if section_name:
+                    system_name_to_cost[section_name] = section_cost
+                    result['special_systems'].append({
+                        'name': section_name,
+                        'type': 'FERRY',
+                        'cost': section_cost,
+                        'operator': section.get('operatorName', '')
+                    })
             else:
                 road_toll += section_cost
 
-        # Jeśli nie znaleziono kosztów w sekcjach, spróbuj z systemów
-        if (road_toll + tunnel_toll + bridge_toll + ferry_toll) == 0:
-            for system in toll_data.get('systems', []):
+        # Sprawdź systemy opłat - zawsze dla nazw, ale koszty tylko jeśli nie ma sekcji
+        has_section_costs = (road_toll + tunnel_toll + bridge_toll + ferry_toll) > 0
+        
+        for system in toll_data.get('systems', []):
                 system_cost = system.get('costs', {}).get('convertedPrice', {}).get('price', 0)
                 system_name = system.get('name', '').upper()
                 system_type = system.get('type', '').upper()
                 operator_name = system.get('operatorName', '').upper()
+                print(f"DEBUG system: name='{system.get('name')}', type='{system_type}', cost={system_cost}")
 
-                # Logowanie szczegółów systemu
-                logging.debug(f"System: {system_name}, Operator: {operator_name}, "
-                            f"Taryfa: {system.get('tariffVersion')} (od {system.get('tariffVersionValidFrom')})")
-
+                # Sprawdź czy system już został dodany z sekcji
+                system_real_name = system.get('name')
+                already_added = any(sys['name'] == system_real_name for sys in result['special_systems'])
+                
                 # Klasyfikacja na podstawie nazwy systemu i typu
                 if 'TUNNEL' in system_name or 'TUNNEL' in system_type:
-                    tunnel_toll += system_cost
+                    if not has_section_costs:  # Dodaj koszt tylko jeśli nie ma kosztów z sekcji
+                        tunnel_toll += system_cost
+                    # Dodaj informację o nazwie systemu tylko jeśli jeszcze nie został dodany
+                    if system_real_name and not already_added:
+                        # Użyj kosztu z mapowania jeśli dostępny, w przeciwnym razie koszt systemowy
+                        display_cost = system_name_to_cost.get(system_real_name, system_cost)
+                        print(f"DEBUG mapping: system_real_name='{system_real_name}', mapped_cost={system_name_to_cost.get(system_real_name)}, system_cost={system_cost}, display_cost={display_cost}")
+                        result['special_systems'].append({
+                            'name': system_real_name,
+                            'type': 'TUNNEL',
+                            'cost': display_cost,
+                            'operator': system.get('operatorName', '')
+                        })
                 elif 'BRIDGE' in system_name or 'BRIDGE' in system_type:
-                    bridge_toll += system_cost
+                    if not has_section_costs:
+                        bridge_toll += system_cost
+                    # Dodaj informację o nazwie systemu tylko jeśli jeszcze nie został dodany
+                    if system_real_name and not already_added:
+                        display_cost = system_name_to_cost.get(system_real_name, system_cost)
+                        result['special_systems'].append({
+                            'name': system_real_name,
+                            'type': 'BRIDGE',
+                            'cost': display_cost,
+                            'operator': system.get('operatorName', '')
+                        })
                 elif 'FERRY' in system_name or 'FERRY' in system_type:
-                    ferry_toll += system_cost
+                    if not has_section_costs:
+                        ferry_toll += system_cost
+                    # Dodaj informację o nazwie systemu tylko jeśli jeszcze nie został dodany
+                    if system_real_name and not already_added:
+                        display_cost = system_name_to_cost.get(system_real_name, system_cost)
+                        result['special_systems'].append({
+                            'name': system_real_name,
+                            'type': 'FERRY',
+                            'cost': display_cost,
+                            'operator': system.get('operatorName', '')
+                        })
                 elif system_type in ["DISTANCE_BASED", "TIME_BASED", "SECTION_BASED"]:
-                    road_toll += system_cost
+                    if not has_section_costs:
+                        road_toll += system_cost
                 else:
                     # Jeśli typ nie jest znany, sprawdź znane systemy
                     if 'MONT-BLANC' in system_name or 'MONT BLANC' in system_name:
-                        tunnel_toll += system_cost
+                        if not has_section_costs:
+                            tunnel_toll += system_cost
+                        # Dla Mont-Blanc zawsze dodaj informację o nazwie jeśli nie został już dodany
+                        if not already_added:
+                            final_name = system_real_name or 'Mont-Blanc Tunnel'
+                            display_cost = system_name_to_cost.get(final_name, system_cost)
+                            result['special_systems'].append({
+                                'name': final_name,
+                                'type': 'TUNNEL',
+                                'cost': display_cost,
+                                'operator': system.get('operatorName', '')
+                            })
                     else:
-                        road_toll += system_cost
+                        if not has_section_costs:
+                            road_toll += system_cost
 
         # Jeśli wciąż nie mamy kosztów, ale mamy całkowity koszt, spróbuj oszacować
         if (road_toll + tunnel_toll + bridge_toll + ferry_toll) == 0 and total_cost > 0:

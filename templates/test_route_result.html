@@ -94,6 +94,21 @@
         </div>
     </div>
     <div class="card-body">
+        {% if matrix_name %}
+        <div class="alert alert-info mb-3">
+            <i class="fas fa-info-circle"></i> Używana macierz marży: <strong>{{ matrix_name }}</strong>
+        </div>
+        {% endif %}
+        
+        <div class="alert alert-secondary mb-3">
+            <i class="fas fa-cog"></i> Parametry obliczeń: 
+            <strong>Koszt paliwa:</strong> {{ "%.2f"|format(fuel_cost) }} €/km | 
+            <strong>Koszt kierowcy + leasing:</strong> {{ "%.0f"|format(driver_cost) }} €/dzień
+            {% if transit_time %}
+            | <strong>Transit time:</strong> {{ transit_time }} dni
+            {% endif %}
+        </div>
+        
         <div class="route-info">
             <div class="route-points">
                 <div class="route-point">
@@ -125,6 +140,40 @@
                 <a id="map-link" href="#" target="_blank" class="btn btn-primary">
                     <i class="fas fa-map-marked-alt"></i> Zobacz na mapie
                 </a>
+            </div>
+            
+            <div class="row">
+                <div class="col-md-12">
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            <i class="fas fa-calculator"></i> Sugerowane frachty
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="route-details">
+                                <div class="route-detail-item">
+                                    <span class="route-detail-label">Sugerowany fracht wg historycznych stawek:</span>
+                                    <span id="suggested-fracht-historical" class="route-detail-value">-</span>
+                                </div>
+                                <div class="route-detail-item">
+                                    <span class="route-detail-label">Sugerowany fracht wg matrixa:</span>
+                                    <span id="suggested-fracht-matrix" class="route-detail-value">-</span>
+                                </div>
+                                <div class="route-detail-item">
+                                    <span class="route-detail-label">Oczekiwany zysk:</span>
+                                    <span id="expected-profit" class="route-detail-value">-</span>
+                                </div>
+                                <div class="route-detail-item">
+                                                            <span class="route-detail-label">Transit time (dni):</span>
+                        <span id="driver-days" class="route-detail-value">-</span>
+                                </div>
+                                <div class="route-detail-item">
+                                    <span class="route-detail-label">Relacja regionalna:</span>
+                                    <span id="regional-relation" class="route-detail-value">-</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
             
             <div class="row">
@@ -262,8 +311,27 @@
         const unloadCountry = "{{ unload[0] }}";
         const unloadPostal = "{{ unload[1] }}";
         
+        // Pobierz opcjonalny transit time
+        const transitTime = "{{ transit_time }}";
+        
+        // Pobierz koszty paliwa i kierowcy
+        const fuelCost = "{{ fuel_cost }}";
+        const driverCost = "{{ driver_cost }}";
+        
+        // Przygotuj URL z parametrami
+        let url = `/test_truck_route?coord_from=${coordFrom}&coord_to=${coordTo}&load_country=${loadCountry}&load_postal=${loadPostal}&unload_country=${unloadCountry}&unload_postal=${unloadPostal}`;
+        if (transitTime && transitTime !== 'None') {
+            url += `&transit_time=${transitTime}`;
+        }
+        if (fuelCost) {
+            url += `&fuel_cost=${fuelCost}`;
+        }
+        if (driverCost) {
+            url += `&driver_cost=${driverCost}`;
+        }
+        
         // Wywołaj API do obliczenia trasy
-        fetch(`/test_truck_route?coord_from=${coordFrom}&coord_to=${coordTo}&load_country=${loadCountry}&load_postal=${loadPostal}&unload_country=${unloadCountry}&unload_postal=${unloadPostal}`)
+        fetch(url)
             .then(response => response.json())
             .then(data => {
                 // Ukryj ładowanie, pokaż wyniki
@@ -281,6 +349,13 @@
                 document.getElementById('driver-cost').textContent = `${data.koszt_kierowcy}€`;
                 document.getElementById('approach-tolls').textContent = `${data.oplaty_drogowe_podlot}€`;
                 document.getElementById('total-cost').textContent = `${data.suma_kosztow}€`;
+                
+                // Aktualizuj sugerowane frachty
+                document.getElementById('suggested-fracht-historical').textContent = (data.sugerowany_fracht_historyczny && data.sugerowany_fracht_historyczny !== '0') ? `${data.sugerowany_fracht_historyczny}€` : '-';
+                document.getElementById('suggested-fracht-matrix').textContent = `${data.sugerowany_fracht_matrix}€`;
+                document.getElementById('expected-profit').textContent = `${data.oczekiwany_zysk}€`;
+                document.getElementById('driver-days').textContent = data.transit_time_dni ? parseFloat(data.transit_time_dni).toFixed(2) : '-';
+                document.getElementById('regional-relation').textContent = `${data.loading_region} → ${data.unloading_region}`;
                 
                 // Aktualizuj historyczne stawki
                 document.getElementById('client-rate-3m').textContent = data.region_klient_stawka_3m ? `${data.region_klient_stawka_3m}€/km` : '-';

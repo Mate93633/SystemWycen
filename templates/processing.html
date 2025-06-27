@@ -109,17 +109,17 @@
         box-shadow: 0 1px 0 var(--border-color);
         white-space: normal;
         word-wrap: break-word;
-        padding: 8px 10px;
-        font-size: 0.9rem;
-        max-width: 150px;
+        padding: 6px 8px;
+        font-size: 0.75rem;
+        max-width: 120px;
         vertical-align: top;
         text-align: center;
-        line-height: 1.3;
+        line-height: 1.2;
     }
     
     .data-table td {
-        padding: 8px 10px;
-        font-size: 0.9rem;
+        padding: 6px 8px;
+        font-size: 0.75rem;
         vertical-align: middle;
     }
     
@@ -198,7 +198,16 @@
     <div class="card-body">
         <div id="status-container" class="status-message status-processing">
             <div class="spinner"></div>
+            {% if processing_type == "geocoding" %}
+                Trwa sprawdzanie lokalizacji...
+            {% else %}
+                Przetwarzanie danych...
+            {% endif %}
             <span>Trwa przetwarzanie danych...</span>
+        </div>
+        
+        <div id="matrix-info" class="alert alert-info" style="display: none;">
+            <i class="fas fa-info-circle"></i> <span id="matrix-text">Używana macierz marży będzie wyświetlona tutaj</span>
         </div>
         
         <div class="progress-container">
@@ -309,11 +318,12 @@
         const headers = document.getElementById('preview-headers');
         const tbody = document.getElementById('preview-data');
         
-        // Aktualizuj nagłówki
+        // Aktualizuj nagłówki - używamy bezpośrednio nagłówków z danych i dodajemy regionalne
         if (data.preview_data.headers && data.preview_data.headers.length > 0) {
             const customHeaders = [...data.preview_data.headers];
-            customHeaders.push('Historyczna stawka km (wg regionów) - Klient');
-            customHeaders.push('Historyczna stawka km (wg regionów) - Giełda');
+            // Dodajemy kolumny regionalne przed kolumnami z marżą (przed ostatnimi 2 kolumnami)
+            customHeaders.splice(-2, 0, 'Stawka Region - Region 3/6/12m Klient');
+            customHeaders.splice(-2, 0, 'Stawka Region - Region 3/6/12m Giełda');
             
             headers.innerHTML = customHeaders
                 .map(header => `<th>${header}</th>`)
@@ -326,28 +336,43 @@
                 // Sprawdź czy wiersz jest zgeokodowany
                 const isGeocoded = row['Dystans (km)'] !== null && row['Dystans (km)'] !== undefined;
                 
-                // Pobierz stawki regionalne z danych (jeśli są dostępne)
-                const getRegionalRate = (row, type) => {
-                    if (row[`Region - ${type} stawka 3m`]) return { rate: row[`Region - ${type} stawka 3m`], period: '3m' };
-                    if (row[`Region - ${type} stawka 6m`]) return { rate: row[`Region - ${type} stawka 6m`], period: '6m' };
-                    if (row[`Region - ${type} stawka 12m`]) return { rate: row[`Region - ${type} stawka 12m`], period: '12m' };
-                    return null;
+                // Pobierz wszystkie stawki regionalne z danych
+                const getAllRegionalRates = (row, type) => {
+                    const rate3m = row[`Region - ${type} stawka 3m`];
+                    const rate6m = row[`Region - ${type} stawka 6m`];
+                    const rate12m = row[`Region - ${type} stawka 12m`];
+                    
+                    return {
+                        rate3m: rate3m,
+                        rate6m: rate6m,
+                        rate12m: rate12m
+                    };
                 };
 
-                const regionKlientRate = getRegionalRate(row, 'Klient');
-                const regionGieldaRate = getRegionalRate(row, 'Giełda');
+                const regionKlientRates = getAllRegionalRates(row, 'Klient');
+                const regionGieldaRates = getAllRegionalRates(row, 'Giełda');
 
-                const formatRegionalRate = (rateInfo) => {
-                    if (!rateInfo) return '-';
-                    return typeof rateInfo.rate === 'number' ? 
-                        `${formatNumber(rateInfo.rate)}€/km (${rateInfo.period})` : '-';
+                const formatAllRegionalRates = (rates) => {
+                    const format3m = (rates.rate3m !== null && rates.rate3m !== undefined && typeof rates.rate3m === 'number') ? 
+                        `${formatNumber(rates.rate3m)}€` : '-';
+                    const format6m = (rates.rate6m !== null && rates.rate6m !== undefined && typeof rates.rate6m === 'number') ? 
+                        `${formatNumber(rates.rate6m)}€` : '-';
+                    const format12m = (rates.rate12m !== null && rates.rate12m !== undefined && typeof rates.rate12m === 'number') ? 
+                        `${formatNumber(rates.rate12m)}€` : '-';
+                    
+                    // Sprawdź czy wszystkie są puste
+                    if (format3m === '-' && format6m === '-' && format12m === '-') {
+                        return '-';
+                    }
+                    
+                    return `${format3m} / ${format6m} / ${format12m}`;
                 };
-
+                
                 // Formatowanie sugerowanego frachtu
                 const formatSuggestedRate = (row) => {
-                    if (row['Sugerowany fracht'] !== null && row['Sugerowany fracht'] !== undefined) {
+                    if (row['Sugerowany fracht wg historycznych stawek'] !== null && row['Sugerowany fracht wg historycznych stawek'] !== undefined) {
                         const period = row['Sugerowany fracht okres'] || '3m';  // Domyślnie 3m jeśli brak okresu
-                        return `${formatInteger(row['Sugerowany fracht'])}€/km (${period})`;
+                        return `${formatInteger(row['Sugerowany fracht wg historycznych stawek'])}€/km (${period})`;
                     }
                     return '-';
                 };
@@ -373,6 +398,7 @@
                     <td>${formatNumber(row['Koszt paliwa'])}${row['Koszt paliwa'] ? '€' : ''}</td>
                     <td>${formatNumber(row['Opłaty drogowe'])}${row['Opłaty drogowe'] ? '€' : ''}</td>
                     <td>${formatInteger(row['Koszt kierowcy + leasing'])}${row['Koszt kierowcy + leasing'] ? '€' : ''}</td>
+                    <td>${formatNumber(row['Koszt podlotu (opłaty + paliwo)'])}${row['Koszt podlotu (opłaty + paliwo)'] ? '€' : ''}</td>
                     <td>${formatNumber(row['Opłaty/km'])}${row['Opłaty/km'] ? '€/km' : ''}</td>
                     <td style="white-space: pre-line">${row['Opłaty drogowe (szczegóły)'] || '-'}</td>
                     <td>${formatInteger(row['Suma kosztów'])}${row['Suma kosztów'] ? '€' : ''}</td>
@@ -383,8 +409,11 @@
                             </a>` : '-'}
                     </td>
                     <td>${formatSuggestedRate(row)}</td>
-                    <td>${formatRegionalRate(regionKlientRate)}</td>
-                    <td>${formatRegionalRate(regionGieldaRate)}</td>
+                    <td>${formatInteger(row['Sugerowany fracht wg matrixa'])}${row['Sugerowany fracht wg matrixa'] ? '€' : ''}</td>
+                    <td style="white-space: nowrap;">${formatAllRegionalRates(regionKlientRates)}</td>
+                    <td style="white-space: nowrap;">${formatAllRegionalRates(regionGieldaRates)}</td>
+                    <td>${formatInteger(row['Oczekiwany zysk'])}${row['Oczekiwany zysk'] ? '€' : ''}</td>
+                    <td>${formatNumber(row['Transit time (dni)']) || '-'}</td>
                 </tr>
             `})
             .join('');
@@ -392,34 +421,71 @@
 
     // Funkcja sprawdzająca postęp przetwarzania
     function checkProgress() {
-        fetch('/progress')
+        // Sprawdź typ przetwarzania i wybierz odpowiedni endpoint
+        const progressEndpoint = '{{ processing_type }}' === 'geocoding' ? '/geocoding_progress' : '/progress';
+        
+        fetch(progressEndpoint)
             .then(response => response.json())
             .then(data => {
-                // Aktualizuj pasek postępu
-                updateProgress(data.progress, data.current, data.total);
-                
-                // Aktualizuj pasek postępu geokodowania
-                updateGeocodingProgress(data.geocoding_progress);
-                
-                // Aktualizuj tabelę podglądu
-                if (data.preview_data && data.preview_data.rows) {
-                    updatePreviewTable(data);
-                }
-                
-                // Aktualizuj status
-                const statusContainer = document.getElementById('status-container');
-                const downloadContainer = document.getElementById('download-container');
-                
-                if (data.processing_complete) {
-                    if (data.error) {
-                        statusContainer.className = 'status-message status-error';
-                        statusContainer.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Wystąpił błąd podczas przetwarzania danych.';
-                    } else {
+                // Dla geokodowania
+                if ('{{ processing_type }}' === 'geocoding') {
+                    // Aktualizuj pasek postępu geokodowania
+                    updateProgress(data.progress, data.current, data.total);
+                    
+                    const statusContainer = document.getElementById('status-container');
+                    
+                    if (data.status === 'completed') {
                         statusContainer.className = 'status-message status-complete';
-                        statusContainer.innerHTML = '<i class="fas fa-check-circle"></i> Przetwarzanie zakończone pomyślnie!';
-                        downloadContainer.style.display = 'block';
+                        statusContainer.innerHTML = '<i class="fas fa-check-circle"></i> Sprawdzanie lokalizacji zakończone pomyślnie!';
+                        
+                        // Przekieruj do wyników
+                        setTimeout(() => {
+                            window.location.href = '/ungeocoded_locations';
+                        }, 1500);
+                        
+                        return; // Zakończ sprawdzanie postępu
+                    } else if (data.status === 'running') {
+                        statusContainer.innerHTML = `
+                            <div class="spinner"></div>
+                            Sprawdzanie lokalizacji: ${data.current} z ${data.total}
+                        `;
                     }
-                    return; // Zakończ sprawdzanie postępu
+                } else {
+                    // Standardowe przetwarzanie przetargów
+                    // Aktualizuj pasek postępu
+                    updateProgress(data.progress, data.current, data.total);
+                    
+                    // Aktualizuj pasek postępu geokodowania
+                    updateGeocodingProgress(data.geocoding_progress);
+                    
+                    // Aktualizuj informację o macierzy
+                    if (data.matrix_name) {
+                        const matrixInfo = document.getElementById('matrix-info');
+                        const matrixText = document.getElementById('matrix-text');
+                        matrixText.textContent = `Używana macierz marży: ${data.matrix_name}`;
+                        matrixInfo.style.display = 'block';
+                    }
+                    
+                    // Aktualizuj tabelę podglądu
+                    if (data.preview_data && data.preview_data.rows) {
+                        updatePreviewTable(data);
+                    }
+                    
+                    // Aktualizuj status
+                    const statusContainer = document.getElementById('status-container');
+                    const downloadContainer = document.getElementById('download-container');
+                    
+                    if (data.processing_complete) {
+                        if (data.error) {
+                            statusContainer.className = 'status-message status-error';
+                            statusContainer.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Wystąpił błąd podczas przetwarzania danych.';
+                        } else {
+                            statusContainer.className = 'status-message status-complete';
+                            statusContainer.innerHTML = '<i class="fas fa-check-circle"></i> Przetwarzanie zakończone pomyślnie!';
+                            downloadContainer.style.display = 'block';
+                        }
+                        return; // Zakończ sprawdzanie postępu
+                    }
                 }
                 
                 // Kontynuuj sprawdzanie postępu co 1 sekundę

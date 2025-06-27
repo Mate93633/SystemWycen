@@ -20,15 +20,24 @@
                 <input type="file" name="file" id="file" class="form-control" accept=".xlsx,.xls" required>
             </div>
 
+            <div class="form-group">
+                <label for="matrix_type" class="form-label">Matrix marży na dzień:</label>
+                <select name="matrix_type" id="matrix_type" class="form-control" required>
+                    <option value="klient" selected>Matrix Klient</option>
+                    <option value="targi">Matrix Targi</option>
+                </select>
+                <small class="form-text text-muted">Wybierz typ matrixa do obliczeń oczekiwanego zysku</small>
+            </div>
+
             <div class="d-flex">
                 <div class="form-group" style="flex: 1; margin-right: 15px;">
                     <label for="fuel_cost" class="form-label">Koszt paliwa (€/km):</label>
-                    <input type="number" name="fuel_cost" id="fuel_cost" class="form-control" value="0.40" step="0.01" min="0" required>
+                    <input type="number" name="fuel_cost" id="fuel_cost" class="form-control" value="{{ "%.2f"|format(default_fuel_cost) }}" step="0.01" min="0" required>
                 </div>
 
                 <div class="form-group" style="flex: 1;">
                     <label for="driver_cost" class="form-label">Koszt kierowcy + leasing (€/dzień):</label>
-                    <input type="number" name="driver_cost" id="driver_cost" class="form-control" value="210" step="1" min="0" required>
+                    <input type="number" name="driver_cost" id="driver_cost" class="form-control" value="{{ default_driver_cost }}" step="1" min="0" required>
                 </div>
             </div>
 
