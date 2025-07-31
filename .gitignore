@@ -1,0 +1,38 @@
+# Pliki OSRM - duże pliki danych
+osrm/
+*.osm.pbf
+*.osrm
+*.osrm.*
+
+# Pliki cache i tymczasowe
+*_cache/
+*.cache
+*.tmp
+
+# Środowisko wirtualne Python
+venv/
+env/
+.venv/
+
+# Pliki kompilowane Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pliki logów
+*.log
+logs/
+
+# Pliki IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Pliki systemu operacyjnego
+.DS_Store
+Thumbs.db
+
+# Pliki tymczasowe Excel
+~$*.xlsx
+~$*.xls 
