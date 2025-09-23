@@ -159,10 +159,13 @@
                                     <span id="suggested-fracht-matrix" class="route-detail-value">-</span>
                                 </div>
                                 <div class="route-detail-item">
+<<<<<<< HEAD
                                     <span class="route-detail-label">Sugerowana stawka wg matrixa:</span>
                                     <span id="suggested-rate-matrix" class="route-detail-value">-</span>
                                 </div>
                                 <div class="route-detail-item">
+=======
+>>>>>>> 3c2da5193ffd78283f70c0a287b978ac9356ebd2
                                     <span class="route-detail-label">Oczekiwany zysk:</span>
                                     <span id="expected-profit" class="route-detail-value">-</span>
                                 </div>
@@ -357,12 +360,15 @@
                 // Aktualizuj sugerowane frachty
                 document.getElementById('suggested-fracht-historical').textContent = (data.sugerowany_fracht_historyczny && data.sugerowany_fracht_historyczny !== '0') ? `${data.sugerowany_fracht_historyczny}€` : '-';
                 document.getElementById('suggested-fracht-matrix').textContent = `${data.sugerowany_fracht_matrix}€`;
+<<<<<<< HEAD
                 
                 // Oblicz sugerowaną stawkę wg matrixa
                 const totalDistance = parseFloat(data.distance) + (data.podlot ? parseFloat(data.podlot) : 0);
                 const suggestedRateMatrix = totalDistance > 0 ? (parseFloat(data.sugerowany_fracht_matrix) / totalDistance).toFixed(2) : 0;
                 document.getElementById('suggested-rate-matrix').textContent = `${suggestedRateMatrix}€/km`;
                 
+=======
+>>>>>>> 3c2da5193ffd78283f70c0a287b978ac9356ebd2
                 document.getElementById('expected-profit').textContent = `${data.oczekiwany_zysk}€`;
                 document.getElementById('driver-days').textContent = data.transit_time_dni ? parseFloat(data.transit_time_dni).toFixed(2) : '-';
                 document.getElementById('regional-relation').textContent = `${data.loading_region} → ${data.unloading_region}`;
