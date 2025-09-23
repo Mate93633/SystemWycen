@@ -470,7 +470,7 @@ Parametry: {params}
             section_cost = section.get('costs', [{}])[0].get('convertedPrice', {}).get('price', 0)
             section_type = section.get('tollRoadType', '').upper()
             section_name = section.get('name')
-            print(f"DEBUG section: name='{section_name}', type='{section_type}', cost={section_cost}")
+            #print(f"DEBUG section: name='{section_name}', type='{section_type}', cost={section_cost}")
             
             if section_type == 'TUNNEL':
                 tunnel_toll += section_cost
@@ -539,7 +539,7 @@ Parametry: {params}
                 system_name = system.get('name', '').upper()
                 system_type = system.get('type', '').upper()
                 operator_name = system.get('operatorName', '').upper()
-                print(f"DEBUG system: name='{system.get('name')}', type='{system_type}', cost={system_cost}")
+                ##print(f"DEBUG system: name='{system.get('name')}', type='{system_type}', cost={system_cost}")
 
                 # Sprawdź czy system już został dodany z sekcji
                 system_real_name = system.get('name')

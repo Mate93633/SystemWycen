@@ -2295,7 +2295,7 @@ def format_toll_details(toll_details, road_toll, other_toll, special_systems=Non
     toll_text = "\n".join([f"{country}: {format_currency(cost)}€" for country, cost in toll_details.items()])
     ##toll_text += f"\n\nOpłaty drogowe: {format_currency(road_toll)}€"
     
-    print(f"DEBUG format_toll_details: initial toll_text='{toll_text}'")
+    ##print(f"DEBUG format_toll_details: initial toll_text='{toll_text}'")
     
     if other_toll > 0:
         print(f"DEBUG format_toll_details: other_toll > 0, checking special_systems")
