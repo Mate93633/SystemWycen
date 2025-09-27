@@ -3844,6 +3844,11 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
 
 
 def save_caches():
+    # Na Vercel pomijaj zapisywanie cache do plików joblib
+    if os.environ.get('VERCEL'):
+        print("Środowisko Vercel: pomijam zapisywanie cache do plików joblib")
+        return
+        
     try:
         geo_dict = {key: geo_cache[key] for key in geo_cache}
         route_dict = {key: route_cache[key] for key in route_cache}
@@ -3855,6 +3860,11 @@ def save_caches():
 
 
 def load_caches():
+    # Na Vercel pomijaj ładowanie cache z plików joblib
+    if os.environ.get('VERCEL'):
+        print("Środowisko Vercel: pomijam ładowanie cache z plików joblib")
+        return
+        
     try:
         if os.path.exists('geo_cache_backup.joblib'):
             geo_cache_data = joblib.load('geo_cache_backup.joblib')
