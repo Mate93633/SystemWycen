@@ -4184,13 +4184,44 @@ def ungeocoded_locations():
                     print(f"Przetwarzanie {total_locations} unikalnych lokalizacji...")
                     print(f"Szacowany czas: {total_locations * 0.5:.0f}-{total_locations * 1:.0f} sekund")
                     
-                    locations_data = get_all_locations_status(df)
-                    print("Znalezione lokalizacje:")
-                    print(f"Poprawne: {len(locations_data['correct_locations'])}")
-                    print(f"Do weryfikacji: {len(locations_data['locations'])}")
+                    # Zapisz dane w cache dla background processing
+                    file_cache_key = f"file_{hash(file_bytes)}"
+                    locations_cache[file_cache_key] = {
+                        'df': df,
+                        'timestamp': time.time(),
+                        'ttl': 3600
+                    }
                     
-                    # Na Vercel zwróć bezpośrednio wyniki
-                    return render_template("ungeocoded_locations.html", locations_data=locations_data)
+                    # Uruchom background processing
+                    import threading
+                    def background_geocoding():
+                        global PROGRESS, CURRENT_ROW, TOTAL_ROWS, PROCESSING_COMPLETE
+                        try:
+                            print("Rozpoczynam background geokodowanie...")
+                            locations_data = get_all_locations_status(df)
+                            
+                            # Zapisz wyniki w cache
+                            locations_cache[f"results_{file_cache_key}"] = {
+                                'data': locations_data,
+                                'timestamp': time.time(),
+                                'ttl': 3600
+                            }
+                            
+                            PROCESSING_COMPLETE = True
+                            PROGRESS = 100
+                            print("Background geokodowanie zakończone!")
+                            
+                        except Exception as e:
+                            print(f"Błąd w background processing: {e}")
+                            PROCESSING_COMPLETE = True
+                            PROGRESS = -1
+                    
+                    thread = threading.Thread(target=background_geocoding)
+                    thread.daemon = True
+                    thread.start()
+                    
+                    # Zwróć stronę z progress monitoring (nie wyniki!)
+                    return render_template("upload_for_geocoding.html")
                     
                 except Exception as e:
                     print(f"Błąd podczas przetwarzania pliku: {str(e)}")
