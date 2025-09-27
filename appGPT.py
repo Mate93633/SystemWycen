@@ -4149,6 +4149,30 @@ def ungeocoded_locations():
                     )
                     print("Kolumny w pliku Excel:", df.columns.tolist())
                     
+                    # Policz unikalne lokalizacje dla informacji użytkownika
+                    unique_locations = set()
+                    for _, row in df.iterrows():
+                        try:
+                            kraj_zal = str(row.get('kraj zaladunku', '')).strip()
+                            if kraj_zal.lower() in ['kraj zaladunku', 'kraj załadunku', '']:
+                                continue
+                            kod_zal = str(row.get('kod pocztowy zaladunku', '')).strip()
+                            miasto_zal = str(row.get('miasto zaladunku', '')).strip()
+                            kraj_rozl = str(row.get('kraj rozladunku', '')).strip()
+                            kod_rozl = str(row.get('kod pocztowy rozladunku', '')).strip()
+                            miasto_rozl = str(row.get('miasto rozladunku', '')).strip()
+                            
+                            if kraj_zal and kod_zal:
+                                unique_locations.add((kraj_zal, kod_zal, miasto_zal))
+                            if kraj_rozl and kod_rozl:
+                                unique_locations.add((kraj_rozl, kod_rozl, miasto_rozl))
+                        except Exception as e:
+                            continue
+                    
+                    total_locations = len(unique_locations)
+                    print(f"Przetwarzanie {total_locations} unikalnych lokalizacji...")
+                    print(f"Szacowany czas: {total_locations * 0.5:.0f}-{total_locations * 1:.0f} sekund")
+                    
                     locations_data = get_all_locations_status(df)
                     print("Znalezione lokalizacje:")
                     print(f"Poprawne: {len(locations_data['correct_locations'])}")
