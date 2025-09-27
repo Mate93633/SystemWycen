@@ -4701,16 +4701,16 @@ def geocoding_progress():
             'status': 'idle'
         })
 
-if __name__ == '__main__':
-    load_caches()
-    load_margin_matrix()  # Wczytaj domyślną macierz marży (Matrix.xlsx)
-    log = logging.getLogger('werkzeug')
+# Inicjalizacja dla Vercel - ładujemy cache i macierz na starcie
+load_caches()
+load_margin_matrix()  # Wczytaj domyślną macierz marży (Matrix.xlsx)
 
+if __name__ == '__main__':
+    log = logging.getLogger('werkzeug')
 
     class FilterProgress(logging.Filter):
         def filter(self, record):
             return "/progress" not in record.getMessage()
-
 
     log.addFilter(FilterProgress())
     app.run(debug=True, host='0.0.0.0')
