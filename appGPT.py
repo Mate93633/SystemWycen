@@ -1917,8 +1917,12 @@ def get_all_locations_status(df):
     print(f"Zebrano {len(unique_locations)} unikalnych lokalizacji do sprawdzenia")
 
     # Inicjalizuj zmienne postępu
+    global PROGRESS, CURRENT_ROW, TOTAL_ROWS
     GEOCODING_TOTAL = len(unique_locations)
     GEOCODING_CURRENT = 0
+    TOTAL_ROWS = len(unique_locations)
+    PROGRESS = 0
+    CURRENT_ROW = 0
 
     location_id = 1  # Dodajemy licznik dla ID lokalizacji
     for loc in unique_locations:
@@ -2017,6 +2021,12 @@ def get_all_locations_status(df):
 
         # Aktualizuj postęp
         GEOCODING_CURRENT += 1
+        CURRENT_ROW += 1
+        PROGRESS = int((CURRENT_ROW / TOTAL_ROWS) * 100)
+        
+        # Na Vercel wyświetl postęp w konsoli
+        if os.environ.get('VERCEL'):
+            print(f"Postęp geokodowania: {PROGRESS}% ({CURRENT_ROW}/{TOTAL_ROWS})")
 
     print(f"Znaleziono {len(ungeocoded_locations)} nierozpoznanych lokalizacji")
     print(f"Znaleziono {len(geocoded_locations)} rozpoznanych lokalizacji")
@@ -4858,15 +4868,15 @@ def calculate_weighted_podlot(podlot_hist, z_hist, podlot_gielda, z_gielda):
 @app.route("/geocoding_progress")
 def geocoding_progress():
     """Endpoint do śledzenia postępu geokodowania"""
-    global GEOCODING_CURRENT, GEOCODING_TOTAL
+    global GEOCODING_CURRENT, GEOCODING_TOTAL, PROGRESS, CURRENT_ROW, TOTAL_ROWS
     
-    # Na Vercel, geokodowanie jest synchroniczne, więc zawsze zwracaj completed
+    # Na Vercel, geokodowanie jest synchroniczne, ale możemy zwrócić aktualny postęp
     if os.environ.get('VERCEL'):
         return jsonify({
-            'progress': 100,
-            'current': 1,
-            'total': 1,
-            'status': 'completed'
+            'progress': PROGRESS,
+            'current': CURRENT_ROW,
+            'total': TOTAL_ROWS,
+            'status': 'completed' if PROGRESS >= 100 else 'processing'
         })
     
     # Lokalne środowisko - używaj globalnych zmiennych
