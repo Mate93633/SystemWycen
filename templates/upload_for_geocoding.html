@@ -222,8 +222,26 @@ document.getElementById('geocodingForm').addEventListener('submit', function(e) 
     })
     .then(response => {
         if (response.ok) {
-            // Rozpocznij monitorowanie postępu
-            startProgressMonitoring();
+            // Sprawdź Content-Type aby określić czy to HTML z wynikami (Vercel) czy redirect (lokalne)
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('text/html')) {
+                // Vercel: synchroniczne przetwarzanie - przekieruj bezpośrednio do wyników
+                return response.text().then(html => {
+                    // Sprawdź czy HTML zawiera dane geokodowania
+                    if (html.includes('stat-number') || html.includes('locations_data')) {
+                        // Wyniki są gotowe - wyświetl je
+                        document.open();
+                        document.write(html);
+                        document.close();
+                    } else {
+                        // Brak danych - przekieruj do strony wyników
+                        window.location.href = '/ungeocoded_locations';
+                    }
+                });
+            } else {
+                // Lokalne środowisko: asynchroniczne przetwarzanie
+                startProgressMonitoring();
+            }
         } else {
             throw new Error('Błąd podczas przesyłania pliku');
         }
