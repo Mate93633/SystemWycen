@@ -73,14 +73,25 @@ DEFAULT_FUEL_COST = 0.40  # Domyślny koszt paliwa EUR/km
 DEFAULT_DRIVER_COST = 210  # Domyślny koszt kierowcy EUR/dzień
 
 # Konfiguracja loggera - zmiana poziomu na ERROR aby ograniczyć logi
-logging.basicConfig(
-    level=logging.ERROR,  # Zmieniono z INFO na ERROR
-    format='%(message)s',  # Uproszczony format bez timestampów
-    handlers=[
-        logging.FileHandler('app.log'),
-        logging.StreamHandler()
-    ]
-)
+# Na Vercel używamy tylko StreamHandler (system plików jest read-only)
+import os
+if os.environ.get('VERCEL'):
+    # W środowisku Vercel używamy tylko StreamHandler
+    logging.basicConfig(
+        level=logging.ERROR,
+        format='%(message)s',
+        handlers=[logging.StreamHandler()]
+    )
+else:
+    # Lokalnie używamy zarówno FileHandler jak i StreamHandler
+    logging.basicConfig(
+        level=logging.ERROR,
+        format='%(message)s',
+        handlers=[
+            logging.FileHandler('app.log'),
+            logging.StreamHandler()
+        ]
+    )
 logger = logging.getLogger(__name__)
 
 # Wyłączenie debugowych logów urllib3
@@ -103,10 +114,47 @@ route_logger.propagate = False  # Zapobiegamy propagacji logów do rodzica
 # Inicjalizacja geolokatora
 geolocator = Nominatim(user_agent="wycena_transportu", timeout=15)
 
-# Inicjalizacja pamięci podręcznych
-geo_cache = Cache("geo_cache")
-route_cache = Cache("route_cache")
-locations_cache = Cache("locations_cache")
+# Inicjalizacja pamięci podręcznych - dostosowane do środowiska Vercel
+if os.environ.get('VERCEL'):
+    # W środowisku Vercel używamy prostych słowników w pamięci (brak możliwości zapisu na dysk)
+    geo_cache = {}
+    route_cache = {}
+    locations_cache = {}
+    
+    # Dodajemy podstawowe metody cache'a jako funkcje wrapper
+    class SimpleCache:
+        def __init__(self, cache_dict):
+            self.cache = cache_dict
+            
+        def get(self, key, default=None):
+            return self.cache.get(key, default)
+            
+        def set(self, key, value):
+            # Ograniczamy rozmiar cache'a w pamięci
+            if len(self.cache) > 1000:
+                # Usuwamy najstarsze wpisy (prosty FIFO)
+                keys_to_remove = list(self.cache.keys())[:100]
+                for k in keys_to_remove:
+                    del self.cache[k]
+            self.cache[key] = value
+            
+        def __contains__(self, key):
+            return key in self.cache
+            
+        def __getitem__(self, key):
+            return self.cache[key]
+            
+        def __setitem__(self, key, value):
+            self.set(key, value)
+    
+    geo_cache = SimpleCache(geo_cache)
+    route_cache = SimpleCache(route_cache)
+    locations_cache = SimpleCache(locations_cache)
+else:
+    # Lokalnie używamy normalnych cache'ów na dysku
+    geo_cache = Cache("geo_cache")
+    route_cache = Cache("route_cache")
+    locations_cache = Cache("locations_cache")
 
 # Inicjalizacja menedżera PTV
 ptv_manager = PTVRouteManager(PTV_API_KEY)
@@ -861,6 +909,10 @@ def get_region_based_rates(lc, lp, uc, up):
         }
 
     try:
+        if os.environ.get('VERCEL'):
+            # W środowisku Vercel nie mamy dostępu do plików Excel
+            raise FileNotFoundError("Pliki historycznych stawek niedostępne w środowisku Vercel")
+            
         hist_df = pd.read_excel("historical_rates.xlsx",
                                 dtype={'kod pocztowy zaladunku': str, 'kod pocztowy rozladunku': str})
         gielda_df = pd.read_excel("historical_rates_gielda.xlsx",
@@ -2041,6 +2093,23 @@ def load_margin_matrix(matrix_file='Matrix.xlsx'):
     """
     global MARGIN_MATRIX, CURRENT_MATRIX_FILE
     
+    # W środowisku Vercel używamy domyślnej macierzy marży
+    if os.environ.get('VERCEL'):
+        print("Środowisko Vercel - używam domyślnej macierzy marży")
+        # Tworzymy prostą macierz marży z podstawowymi regionami
+        regions = ['PL', 'DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'CZ', 'AT', 'SK']
+        default_margin = 1.15  # 15% marży
+        
+        MARGIN_MATRIX = pd.DataFrame(
+            default_margin, 
+            index=regions, 
+            columns=regions
+        )
+        CURRENT_MATRIX_FILE = 'default_vercel_matrix'
+        
+        logger.info(f"Utworzono domyślną macierz marży: {MARGIN_MATRIX.shape[0]}x{MARGIN_MATRIX.shape[1]} regionów")
+        return MARGIN_MATRIX
+    
     try:
         # Wczytaj plik Excel bez nagłówków
         df = pd.read_excel(matrix_file, sheet_name='Sheet1', header=None)
@@ -2690,6 +2759,10 @@ def evaluate_geocoding_reliability(quality, source):
 
 def get_all_rates(lc, lp, uc, up, lc_coords, uc_coords):
     try:
+        if os.environ.get('VERCEL'):
+            # W środowisku Vercel nie mamy dostępu do plików Excel
+            raise FileNotFoundError("Pliki historycznych stawek niedostępne w środowisku Vercel")
+            
         historical_rates_df = pd.read_excel("historical_rates.xlsx",
                                             dtype={'kod pocztowy zaladunku': str, 'kod pocztowy rozladunku': str})
         historical_rates_gielda_df = pd.read_excel("historical_rates_gielda.xlsx",
@@ -3753,6 +3826,11 @@ def save_caches():
 
 
 def load_caches():
+    if os.environ.get('VERCEL'):
+        # W środowisku Vercel pomijamy ładowanie cache'ów z plików (read-only filesystem)
+        print("Środowisko Vercel - pomijam ładowanie cache'ów z plików")
+        return
+        
     try:
         if os.path.exists('geo_cache_backup.joblib'):
             geo_cache_data = joblib.load('geo_cache_backup.joblib')
