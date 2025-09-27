@@ -4116,50 +4116,82 @@ def ungeocoded_locations():
             if not file:
                 return render_template("error.html", message="Nie wybrano pliku")
 
-            # Wygeneruj unikalny klucz dla danych
-            data_timestamp = str(time.time())
-            file_bytes = file.read()
-            data_size = str(len(file_bytes))
-            cache_key = hashlib.md5(f"{data_timestamp}_{data_size}".encode()).hexdigest()
-            
-            # Zapisz klucz w sesji
-            session['locations_cache_key'] = cache_key
-            session['processing_status'] = 'running'
-            
-            # Uruchom przetwarzanie w tle
-            thread = threading.Thread(target=background_geocoding_processing, args=(file_bytes, cache_key))
-            thread.daemon = True
-            thread.start()
-            
-            # Zwróć stronę z paskiem postępu
-            return render_template("processing.html", processing_type="geocoding")
+            # Na Vercel, przetwarzaj synchronicznie (bez background threads)
+            if os.environ.get('VERCEL'):
+                try:
+                    file_bytes = file.read()
+                    # Wczytaj dane z Excela, zachowując kody pocztowe jako tekst
+                    df = pd.read_excel(
+                        io.BytesIO(file_bytes),
+                        dtype={
+                            'kod pocztowy zaladunku': str,
+                            'kod pocztowy rozladunku': str,
+                            'kod_pocztowy_zaladunku': str,
+                            'kod_pocztowy_rozladunku': str
+                        }
+                    )
+                    print("Kolumny w pliku Excel:", df.columns.tolist())
+                    
+                    locations_data = get_all_locations_status(df)
+                    print("Znalezione lokalizacje:")
+                    print(f"Poprawne: {len(locations_data['correct_locations'])}")
+                    print(f"Do weryfikacji: {len(locations_data['locations'])}")
+                    
+                    # Na Vercel zwróć bezpośrednio wyniki
+                    return render_template("ungeocoded_locations.html", locations_data=locations_data)
+                    
+                except Exception as e:
+                    print(f"Błąd podczas przetwarzania pliku: {str(e)}")
+                    return render_template("error.html", message=f"Błąd podczas przetwarzania pliku: {str(e)}")
+            else:
+                # Lokalne środowisko - używaj background processing
+                data_timestamp = str(time.time())
+                file_bytes = file.read()
+                data_size = str(len(file_bytes))
+                cache_key = hashlib.md5(f"{data_timestamp}_{data_size}".encode()).hexdigest()
+                
+                # Zapisz klucz w sesji
+                session['locations_cache_key'] = cache_key
+                session['processing_status'] = 'running'
+                
+                # Uruchom przetwarzanie w tle
+                thread = threading.Thread(target=background_geocoding_processing, args=(file_bytes, cache_key))
+                thread.daemon = True
+                thread.start()
+                
+                # Zwróć stronę z paskiem postępu
+                return render_template("processing.html", processing_type="geocoding")
             
         except Exception as e:
             print(f"Błąd podczas przetwarzania pliku: {str(e)}")
             return render_template("error.html", message=f"Błąd podczas przetwarzania pliku: {str(e)}")
     
-    # Dla GET, spróbuj pobrać dane z cache za pomocą klucza z sesji
-    cache_key = session.get('locations_cache_key')
-    locations_data = None
-    
-    if cache_key:
-        try:
-            locations_data = locations_cache.get(cache_key)
-            if locations_data:
-                if 'error' in locations_data:
-                    return render_template("error.html", message=f"Błąd podczas przetwarzania: {locations_data['error']}")
-                    
-                print(f"Pobrano dane z cache z kluczem: {cache_key}")
-                session['processing_status'] = 'completed'
-            else:
-                print(f"Brak danych w cache dla klucza: {cache_key}")
-                # Usuń nieważny klucz z sesji
+    # Dla GET - tylko w środowisku lokalnym (Vercel nie potrzebuje tego)
+    if not os.environ.get('VERCEL'):
+        cache_key = session.get('locations_cache_key')
+        locations_data = None
+        
+        if cache_key:
+            try:
+                locations_data = locations_cache.get(cache_key)
+                if locations_data:
+                    if 'error' in locations_data:
+                        return render_template("error.html", message=f"Błąd podczas przetwarzania: {locations_data['error']}")
+                        
+                    print(f"Pobrano dane z cache z kluczem: {cache_key}")
+                    session['processing_status'] = 'completed'
+                else:
+                    print(f"Brak danych w cache dla klucza: {cache_key}")
+                    # Usuń nieważny klucz z sesji
+                    session.pop('locations_cache_key', None)
+            except Exception as e:
+                print(f"Błąd pobierania z cache: {e}")
                 session.pop('locations_cache_key', None)
-        except Exception as e:
-            print(f"Błąd pobierania z cache: {e}")
-            session.pop('locations_cache_key', None)
-    
-    return render_template("ungeocoded_locations.html", locations_data=locations_data)
+        
+        return render_template("ungeocoded_locations.html", locations_data=locations_data)
+    else:
+        # Na Vercel, GET bez danych - pokaż pustą stronę
+        return render_template("ungeocoded_locations.html", locations_data=None)
 
 
 @app.route("/save_manual_coordinates", methods=['POST'])
@@ -4787,6 +4819,16 @@ def geocoding_progress():
     """Endpoint do śledzenia postępu geokodowania"""
     global GEOCODING_CURRENT, GEOCODING_TOTAL
     
+    # Na Vercel, geokodowanie jest synchroniczne, więc zawsze zwracaj completed
+    if os.environ.get('VERCEL'):
+        return jsonify({
+            'progress': 100,
+            'current': 1,
+            'total': 1,
+            'status': 'completed'
+        })
+    
+    # Lokalne środowisko - używaj globalnych zmiennych
     if GEOCODING_TOTAL > 0:
         progress = int((GEOCODING_CURRENT / GEOCODING_TOTAL) * 100)
         return jsonify({
