@@ -909,9 +909,9 @@ def get_region_based_rates(lc, lp, uc, up):
         }
 
     try:
-        if os.environ.get('VERCEL'):
-            # W środowisku Vercel nie mamy dostępu do plików Excel
-            raise FileNotFoundError("Pliki historycznych stawek niedostępne w środowisku Vercel")
+        # Sprawdź czy pliki istnieją przed próbą wczytania
+        if not os.path.exists("historical_rates.xlsx") or not os.path.exists("historical_rates_gielda.xlsx"):
+            raise FileNotFoundError("Pliki historycznych stawek nie zostały znalezione")
             
         hist_df = pd.read_excel("historical_rates.xlsx",
                                 dtype={'kod pocztowy zaladunku': str, 'kod pocztowy rozladunku': str})
@@ -1033,6 +1033,10 @@ def get_region_based_rates(lc, lp, uc, up):
 
 # Funkcja wczytująca dane z global_data.csv – klucze tworzymy jako stringi, np. "Poland_36"
 def load_global_data(filepath):
+    if not os.path.exists(filepath):
+        print(f"Plik {filepath} nie istnieje - pomijam ładowanie danych globalnych")
+        return
+        
     with open(filepath, newline='', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile, delimiter=",")
         for row in reader:
@@ -2093,9 +2097,9 @@ def load_margin_matrix(matrix_file='Matrix.xlsx'):
     """
     global MARGIN_MATRIX, CURRENT_MATRIX_FILE
     
-    # W środowisku Vercel używamy domyślnej macierzy marży
-    if os.environ.get('VERCEL'):
-        print("Środowisko Vercel - używam domyślnej macierzy marży")
+    # Sprawdź czy plik istnieje, jeśli nie - użyj domyślnej macierzy
+    if not os.path.exists(matrix_file):
+        print(f"Plik {matrix_file} nie istnieje - używam domyślnej macierzy marży")
         # Tworzymy prostą macierz marży z podstawowymi regionami
         regions = ['PL', 'DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'CZ', 'AT', 'SK']
         default_margin = 1.15  # 15% marży
@@ -2105,7 +2109,7 @@ def load_margin_matrix(matrix_file='Matrix.xlsx'):
             index=regions, 
             columns=regions
         )
-        CURRENT_MATRIX_FILE = 'default_vercel_matrix'
+        CURRENT_MATRIX_FILE = f'default_fallback_for_{matrix_file}'
         
         logger.info(f"Utworzono domyślną macierz marży: {MARGIN_MATRIX.shape[0]}x{MARGIN_MATRIX.shape[1]} regionów")
         return MARGIN_MATRIX
@@ -2759,9 +2763,9 @@ def evaluate_geocoding_reliability(quality, source):
 
 def get_all_rates(lc, lp, uc, up, lc_coords, uc_coords):
     try:
-        if os.environ.get('VERCEL'):
-            # W środowisku Vercel nie mamy dostępu do plików Excel
-            raise FileNotFoundError("Pliki historycznych stawek niedostępne w środowisku Vercel")
+        # Sprawdź czy pliki istnieją przed próbą wczytania
+        if not os.path.exists("historical_rates.xlsx") or not os.path.exists("historical_rates_gielda.xlsx"):
+            raise FileNotFoundError("Pliki historycznych stawek nie zostały znalezione")
             
         historical_rates_df = pd.read_excel("historical_rates.xlsx",
                                             dtype={'kod pocztowy zaladunku': str, 'kod pocztowy rozladunku': str})
@@ -3826,11 +3830,6 @@ def save_caches():
 
 
 def load_caches():
-    if os.environ.get('VERCEL'):
-        # W środowisku Vercel pomijamy ładowanie cache'ów z plików (read-only filesystem)
-        print("Środowisko Vercel - pomijam ładowanie cache'ów z plików")
-        return
-        
     try:
         if os.path.exists('geo_cache_backup.joblib'):
             geo_cache_data = joblib.load('geo_cache_backup.joblib')
