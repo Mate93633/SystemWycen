@@ -156,8 +156,15 @@ else:
     route_cache = Cache("route_cache")
     locations_cache = Cache("locations_cache")
 
-# Inicjalizacja menedżera PTV
-ptv_manager = PTVRouteManager(PTV_API_KEY)
+# Inicjalizacja menedżera PTV (lazy loading)
+ptv_manager = None
+
+def get_ptv_manager():
+    """Lazy loading PTV manager"""
+    global ptv_manager
+    if ptv_manager is None:
+        ptv_manager = PTVRouteManager(PTV_API_KEY)
+    return ptv_manager
 
 # Zmienne globalne do śledzenia postępu
 PROGRESS = 0
@@ -1087,8 +1094,15 @@ def initialize_app():
     except Exception as e:
         print(f"Błąd podczas inicjalizacji aplikacji: {e}")
 
-# Inicjalizacja na starcie modułu
-initialize_app()
+# Inicjalizacja będzie wykonana przy pierwszym użyciu (lazy loading)
+_app_initialized = False
+
+def ensure_app_initialized():
+    """Zapewnia że aplikacja jest zainicjalizowana (lazy loading)"""
+    global _app_initialized
+    if not _app_initialized:
+        initialize_app()
+        _app_initialized = True
 
 
 def clean_text(text):
@@ -2457,14 +2471,14 @@ def get_toll_cost(
         if is_route_to_or_from_switzerland(loading_country, unloading_country):
             avoid_switzerland = False
     
-    result = ptv_manager.get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
+    result = get_ptv_manager().get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
     if result and 'toll_cost' in result:
         return result['toll_cost']
     return None
 
 
 def get_route_distance(coord_from, coord_to, avoid_switzerland=True, routing_mode=DEFAULT_ROUTING_MODE):
-    result = ptv_manager.get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
+    result = get_ptv_manager().get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
     return result
 
 
@@ -3932,6 +3946,7 @@ def show_cache():
 
 @app.route("/", methods=["GET", "POST"])
 def upload_file():
+    ensure_app_initialized()  # Lazy loading
     if request.method == "POST":
         try:
             file = request.files.get("file")
@@ -3968,9 +3983,13 @@ def upload_file():
             return render_template("processing.html")
         except Exception as e:
             return render_template("error.html", message=str(e))
-    return render_template("upload.html", 
+    response = render_template("upload.html", 
                          default_fuel_cost=DEFAULT_FUEL_COST,
                          default_driver_cost=DEFAULT_DRIVER_COST)
+    # Dodaj cache headers dla lepszej wydajności
+    response = app.make_response(response)
+    response.headers['Cache-Control'] = 'public, max-age=300'  # 5 minut cache
+    return response
 
 
 @app.route("/download")
@@ -4050,7 +4069,7 @@ def clear_locations_cache_endpoint():
 
 @app.route("/ptv_stats")
 def ptv_stats():
-    stats = ptv_manager.get_stats()
+    stats = get_ptv_manager().get_stats()
     return jsonify(stats)
 
 
@@ -4160,6 +4179,7 @@ def save_manual_coordinates():
 
 @app.route("/test_route_form", methods=['GET', 'POST'])
 def test_route_form():
+    ensure_app_initialized()  # Lazy loading
     if request.method == 'POST':
         load_country = request.form.get('load_country', '').strip().upper()
         load_postal = request.form.get('load_postal', '').strip()
@@ -4226,7 +4246,10 @@ def test_route_form():
         except Exception as e:
             return render_template("error.html", message=str(e))
 
-    return render_template("test_route_form.html")
+    response = render_template("test_route_form.html")
+    response = app.make_response(response)
+    response.headers['Cache-Control'] = 'public, max-age=300'  # 5 minut cache
+    return response
 
 @app.route("/test_route_result")
 def test_route_result():
@@ -4690,7 +4713,7 @@ def get_route_distance(coord_from, coord_to, loading_country=None, unloading_cou
         if is_route_to_or_from_switzerland(loading_country, unloading_country):
             avoid_switzerland = False
     
-    result = ptv_manager.get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
+    result = get_ptv_manager().get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
     return result
 
 def calculate_podlot_from_data(df, description="podlot"):
