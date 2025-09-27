@@ -1073,10 +1073,22 @@ def sync_geo_cache_with_lookup():
     return synced_count
 
 
-# Na starcie aplikacji
-load_global_data("global_data.csv")
-sync_geo_cache_with_lookup()  # Synchronizuj cache
-load_region_mapping()  # Wczytaj mapowania regionów
+# Funkcja inicjalizująca aplikację
+def initialize_app():
+    """Inicjalizuje wszystkie dane aplikacji"""
+    try:
+        print("Inicjalizacja aplikacji...")
+        load_global_data("global_data.csv")
+        sync_geo_cache_with_lookup()  # Synchronizuj cache
+        load_region_mapping()  # Wczytaj mapowania regionów
+        load_caches()
+        load_margin_matrix()  # Wczytaj domyślną macierz marży (Matrix.xlsx)
+        print("Inicjalizacja aplikacji zakończona pomyślnie")
+    except Exception as e:
+        print(f"Błąd podczas inicjalizacji aplikacji: {e}")
+
+# Inicjalizacja na starcie modułu
+initialize_app()
 
 
 def clean_text(text):
@@ -3866,15 +3878,24 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max-limit
 app.config['SECRET_KEY'] = 'your-secret-key-123'  # Klucz do szyfrowania sesji
 
-# Konfiguracja logowania
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('app.log'),
-        logging.StreamHandler()
-    ]
-)
+# Konfiguracja logowania - dostosowana do środowiska Vercel
+if os.environ.get('VERCEL'):
+    # W środowisku Vercel używamy tylko StreamHandler
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler()]
+    )
+else:
+    # Lokalnie używamy zarówno FileHandler jak i StreamHandler
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('app.log'),
+            logging.StreamHandler()
+        ]
+    )
 
 # Dodanie filtra postępu do loggera
 class FilterProgress(logging.Filter):
@@ -4778,9 +4799,7 @@ def geocoding_progress():
             'status': 'idle'
         })
 
-# Inicjalizacja dla Vercel - ładujemy cache i macierz na starcie
-load_caches()
-load_margin_matrix()  # Wczytaj domyślną macierz marży (Matrix.xlsx)
+# Inicjalizacja już wykonana w initialize_app()
 
 if __name__ == '__main__':
     log = logging.getLogger('werkzeug')
