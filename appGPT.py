@@ -8,7 +8,8 @@ from flask import (
     render_template,
     redirect,
     url_for,
-    session
+    session,
+    Response
 )
 import io
 import time
@@ -4895,6 +4896,69 @@ def geocoding_progress():
             'total': 0,
             'status': 'idle'
         })
+
+@app.route("/geocoding_stream")
+def geocoding_stream():
+    """Server-Sent Events endpoint dla real-time postępu geokodowania"""
+    import json
+    import time
+    
+    def generate():
+        global PROGRESS, CURRENT_ROW, TOTAL_ROWS
+        last_progress = -1
+        start_time = time.time()
+        
+        while True:
+            current_progress = PROGRESS
+            
+            # Wyślij update tylko gdy postęp się zmienił lub co 2 sekundy
+            elapsed = time.time() - start_time
+            if current_progress != last_progress or elapsed > 2:
+                data = {
+                    'progress': current_progress,
+                    'current': CURRENT_ROW,
+                    'total': TOTAL_ROWS,
+                    'status': 'completed' if current_progress >= 100 else 'processing',
+                    'elapsed': int(elapsed)
+                }
+                yield f"data: {json.dumps(data)}\n\n"
+                last_progress = current_progress
+                start_time = time.time()
+                
+                # Zakończ stream gdy ukończono
+                if current_progress >= 100:
+                    break
+            
+            # Krótka pauza
+            time.sleep(0.5)
+    
+    return Response(generate(), mimetype='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive'
+    })
+
+@app.route("/geocoding_results")
+def geocoding_results():
+    """Endpoint do pobrania wyników geokodowania"""
+    global PROCESSING_COMPLETE
+    
+    if PROCESSING_COMPLETE:
+        # Spróbuj znaleźć wyniki w cache lub wygeneruj je ponownie
+        try:
+            # Jeśli mamy wyniki w cache, użyj ich
+            for key in locations_cache:
+                if key.startswith('results_'):
+                    cached_data = locations_cache[key]
+                    if time.time() - cached_data['timestamp'] < cached_data['ttl']:
+                        return render_template("ungeocoded_locations.html", 
+                                             locations_data=cached_data['data'])
+            
+            # Jeśli nie ma w cache, zwróć komunikat o zakończeniu
+            return jsonify({'status': 'completed', 'message': 'Geokodowanie zakończone'})
+        except Exception as e:
+            return render_template("error.html", message=f"Błąd podczas pobierania wyników: {str(e)}")
+    else:
+        return jsonify({'status': 'processing', 'message': 'Geokodowanie w toku'})
 
 # Inicjalizacja już wykonana w initialize_app()
 

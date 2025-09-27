@@ -216,41 +216,31 @@ document.getElementById('geocodingForm').addEventListener('submit', function(e) 
     // Wyślij formularz
     const formData = new FormData(this);
     
-    // Sprawdź czy to Vercel (brak endpoint /geocoding_progress)
-    fetch('/geocoding_progress')
-    .then(response => response.ok)
-    .then(hasProgressEndpoint => {
-        if (!hasProgressEndpoint) {
-            // Vercel: pokaż statyczny loading z szacowanym czasem
-            showVercelLoading();
-        }
-        
-        return fetch('/ungeocoded_locations', {
-            method: 'POST',
-            body: formData
-        });
+    // Wyślij plik i rozpocznij monitorowanie z SSE
+    fetch('/ungeocoded_locations', {
+        method: 'POST',
+        body: formData
     })
     .then(response => {
         if (response.ok) {
-            // Sprawdź Content-Type aby określić czy to HTML z wynikami (Vercel) czy redirect (lokalne)
+            // Sprawdź Content-Type aby określić czy to HTML z wynikami czy redirect
             const contentType = response.headers.get('content-type');
             if (contentType && contentType.includes('text/html')) {
-                // Vercel: synchroniczne przetwarzanie - przekieruj bezpośrednio do wyników
                 return response.text().then(html => {
-                    // Sprawdź czy HTML zawiera dane geokodowania
+                    // Sprawdź czy HTML zawiera dane geokodowania (synchroniczny rezultat)
                     if (html.includes('stat-number') || html.includes('locations_data')) {
                         // Wyniki są gotowe - wyświetl je
                         document.open();
                         document.write(html);
                         document.close();
                     } else {
-                        // Brak danych - przekieruj do strony wyników
-                        window.location.href = '/ungeocoded_locations';
+                        // Rozpocznij monitorowanie z SSE
+                        startSSEProgressMonitoring();
                     }
                 });
             } else {
-                // Lokalne środowisko: asynchroniczne przetwarzanie
-                startProgressMonitoring();
+                // Rozpocznij monitorowanie z SSE
+                startSSEProgressMonitoring();
             }
         } else {
             throw new Error('Błąd podczas przesyłania pliku');
@@ -319,6 +309,61 @@ function startProgressMonitoring() {
     
     // Rozpocznij monitorowanie po krótkim opóźnieniu
     setTimeout(checkProgress, 500);
+}
+
+function startSSEProgressMonitoring() {
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const progressPercent = document.getElementById('progressPercent');
+    const statusText = document.getElementById('statusText');
+    
+    // Sprawdź czy przeglądarka obsługuje SSE
+    if (typeof(EventSource) !== "undefined") {
+        const eventSource = new EventSource('/geocoding_stream');
+        
+        eventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            const progress = data.progress;
+            const current = data.current;
+            const total = data.total;
+            const status = data.status;
+            
+            // Aktualizuj progress bar
+            progressBar.style.width = progress + '%';
+            progressText.textContent = progress + '%';
+            progressPercent.textContent = progress + '%';
+            
+            // Aktualizuj status
+            if (status === 'processing') {
+                statusText.innerHTML = `
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    Geokodowanie: ${current} z ${total} lokalizacji (${progress}%)
+                `;
+            } else if (status === 'completed') {
+                statusText.innerHTML = `
+                    <i class="fas fa-check-circle text-success"></i>
+                    Ukończono geokodowanie ${total} lokalizacji
+                `;
+                
+                eventSource.close();
+                
+                // Pobierz wyniki
+                setTimeout(() => {
+                    window.location.href = '/geocoding_results';
+                }, 1000);
+            }
+        };
+        
+        eventSource.onerror = function(event) {
+            console.error('SSE error:', event);
+            eventSource.close();
+            // Fallback do zwykłego polling
+            startProgressMonitoring();
+        };
+    } else {
+        // Fallback dla przeglądarek bez SSE
+        startProgressMonitoring();
+    }
 }
 
 function showVercelLoading() {
