@@ -4129,6 +4129,13 @@ def ungeocoded_locations():
             # Na Vercel, przetwarzaj synchronicznie (bez background threads)
             if os.environ.get('VERCEL'):
                 try:
+                    # Reset zmiennych progress aby nie pozostały stare wartości
+                    global PROGRESS, CURRENT_ROW, TOTAL_ROWS, PROCESSING_COMPLETE
+                    PROGRESS = 0
+                    CURRENT_ROW = 0
+                    TOTAL_ROWS = 0
+                    PROCESSING_COMPLETE = False
+                    
                     file_bytes = file.read()
                     # Wczytaj dane z Excela, zachowując kody pocztowe jako tekst
                     df = pd.read_excel(
