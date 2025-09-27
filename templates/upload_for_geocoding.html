@@ -216,9 +216,19 @@ document.getElementById('geocodingForm').addEventListener('submit', function(e) 
     // Wyślij formularz
     const formData = new FormData(this);
     
-    fetch('/ungeocoded_locations', {
-        method: 'POST',
-        body: formData
+    // Sprawdź czy to Vercel (brak endpoint /geocoding_progress)
+    fetch('/geocoding_progress')
+    .then(response => response.ok)
+    .then(hasProgressEndpoint => {
+        if (!hasProgressEndpoint) {
+            // Vercel: pokaż statyczny loading z szacowanym czasem
+            showVercelLoading();
+        }
+        
+        return fetch('/ungeocoded_locations', {
+            method: 'POST',
+            body: formData
+        });
     })
     .then(response => {
         if (response.ok) {
@@ -309,6 +319,26 @@ function startProgressMonitoring() {
     
     // Rozpocznij monitorowanie po krótkim opóźnieniu
     setTimeout(checkProgress, 500);
+}
+
+function showVercelLoading() {
+    const statusText = document.getElementById('statusText');
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const progressPercent = document.getElementById('progressPercent');
+    
+    // Pokaż animowany progress bar bez konkretnych wartości
+    progressBar.style.width = '100%';
+    progressText.textContent = 'Przetwarzanie...';
+    progressPercent.textContent = 'Geokodowanie';
+    
+    statusText.innerHTML = `
+        <div class="spinner-border spinner-border-sm" role="status"></div>
+        Przetwarzanie lokalizacji na Vercel (może potrwać do 5 minut)...
+    `;
+    
+    // Dodaj pulsującą animację
+    progressBar.style.animation = 'progressAnimation 2s ease-in-out infinite';
 }
 
 function resetForm() {
