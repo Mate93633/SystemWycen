@@ -3358,17 +3358,16 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
             # Sprawdź czy w wierszu jest zdefiniowana wartość transit time
             transit_time_from_file = get_transit_time_from_row(row)
             
+            # Oblicz driver_days zawsze na podstawie dystansu (standardowa logika biznesowa)
+            driver_days = calculate_driver_days(dist_ptv)
+            
             if transit_time_from_file is not None:
-                # Użyj wartości z pliku
-                driver_days = transit_time_from_file
-                print(f"Wiersz {i+1}: Użyto transit time z pliku: {driver_days} dni")
+                print(f"Wiersz {i+1}: Transit time z pliku: {transit_time_from_file} dni, Driver days obliczone: {driver_days} dni")
             else:
-                # Oblicz standardowo na podstawie dystansu
-                driver_days = calculate_driver_days(dist_ptv)
                 if 'transit time' in row.index:
-                    print(f"Wiersz {i+1}: Kolumna transit time pusta - obliczono z dystansu: {driver_days} dni")
+                    print(f"Wiersz {i+1}: Kolumna transit time pusta - driver days obliczone z dystansu: {driver_days} dni")
                 else:
-                    print(f"Wiersz {i+1}: Brak kolumny transit time - obliczono z dystansu: {driver_days} dni")
+                    print(f"Wiersz {i+1}: Brak kolumny transit time - driver days obliczone z dystansu: {driver_days} dni")
 
             driver_cost_value = driver_days * driver_cost if driver_days is not None else None
 
@@ -4324,30 +4323,14 @@ def test_truck_route():
         # Obliczanie kosztu paliwa (używa przekazanej wartości)
         fuel_cost_value = dist * fuel_cost if dist is not None else None
         
-        # Użyj transit_time jeśli został przekazany, w przeciwnym razie oblicz na podstawie dystansu
-        if transit_time is not None:
-            driver_days = transit_time
-        elif dist is not None:
-            if dist <= 350:
-                driver_days = 1
-            elif 351 <= dist <= 500:
-                driver_days = 1.25
-            elif 501 <= dist <= 700:
-                driver_days = 1.5
-            elif 701 <= dist <= 1100:
-                driver_days = 2
-            elif 1101 <= dist <= 1700:
-                driver_days = 3
-            elif 1701 <= dist <= 2300:
-                driver_days = 4
-            elif 2301 <= dist <= 2900:
-                driver_days = 5
-            elif 2901 <= dist <= 3500:
-                driver_days = 6
-            else:
-                driver_days = None
-        else:
-            driver_days = None
+        # Oblicz transit_time jeśli nie został przekazany
+        if transit_time is None and dist is not None:
+            # Użyj prostej formuły: 1 dzień na każde 600km + 0.5 dnia na start/koniec
+            transit_time = max(0.5, (dist / 600) + 0.5)
+            transit_time = round(transit_time * 4) / 4  # Zaokrąglij do 0.25
+        
+        # Oblicz driver_days używając dedykowanej funkcji
+        driver_days = calculate_driver_days(dist)
             
         driver_cost_value = driver_days * driver_cost if driver_days is not None else None
         
@@ -4411,12 +4394,9 @@ def test_truck_route():
         loading_region = get_region(normalize_country(test_row['Kraj załadunku']), test_row['Kod pocztowy załadunku'])
         unloading_region = get_region(normalize_country(test_row['Kraj rozładunku']), test_row['Kod pocztowy rozładunku'])
         
-        # Oblicz dni kierowcy - użyj przekazanego transit_time lub oblicz na podstawie dystansu
+        # Oblicz dni kierowcy na podstawie dystansu (nie transit_time!)
         distance = test_row.get('Dystans PTV (km)', 0) or 0
-        if transit_time is not None:
-            driver_days_for_profit = transit_time
-        else:
-            driver_days_for_profit = calculate_driver_days(distance)
+        driver_days_for_profit = calculate_driver_days(distance)
         
         # Oblicz oczekiwany zysk
         expected_profit, unit_margin, margin_source = calculate_expected_profit(
@@ -4465,7 +4445,8 @@ def test_truck_route():
             'sugerowany_fracht_matrix': safe_value(format_currency(suggested_fracht_matrix)),
             'oczekiwany_zysk': safe_value(format_currency(expected_profit)),
             'marga_jednostkowa': safe_value(format_currency(unit_margin)),
-            'transit_time_dni': safe_value(driver_days),
+            'transit_time_dni': safe_value(transit_time),
+            'driver_days': safe_value(driver_days),
             'loading_region': loading_region or 'Nieznany',
             'unloading_region': unloading_region or 'Nieznany',
             'kraje': countries,
