@@ -216,33 +216,14 @@ document.getElementById('geocodingForm').addEventListener('submit', function(e) 
     // Wyślij formularz
     const formData = new FormData(this);
     
-    // Wyślij plik i rozpocznij monitorowanie z SSE
     fetch('/ungeocoded_locations', {
         method: 'POST',
         body: formData
     })
     .then(response => {
         if (response.ok) {
-            // Sprawdź Content-Type aby określić czy to HTML z wynikami czy redirect
-            const contentType = response.headers.get('content-type');
-            if (contentType && contentType.includes('text/html')) {
-                return response.text().then(html => {
-                    // Sprawdź czy HTML zawiera dane geokodowania (synchroniczny rezultat)
-                    if (html.includes('stat-number') || html.includes('locations_data')) {
-                        // Wyniki są gotowe - wyświetl je
-                        document.open();
-                        document.write(html);
-                        document.close();
-                    } else {
-                        // Na Vercel geokodowanie jest synchroniczne - nie potrzebujemy SSE
-                        // Jeśli otrzymaliśmy upload page, znaczy że coś poszło nie tak
-                        window.location.href = '/ungeocoded_locations';
-                    }
-                });
-            } else {
-                // Rozpocznij monitorowanie z SSE
-                startSSEProgressMonitoring();
-            }
+            // Rozpocznij monitorowanie postępu
+            startProgressMonitoring();
         } else {
             throw new Error('Błąd podczas przesyłania pliku');
         }
@@ -310,104 +291,6 @@ function startProgressMonitoring() {
     
     // Rozpocznij monitorowanie po krótkim opóźnieniu
     setTimeout(checkProgress, 500);
-}
-
-function startSSEProgressMonitoring() {
-    console.log('🚀 Uruchamiam SSE progress monitoring...');
-    
-    // Pokaż progress container
-    document.getElementById('progressContainer').style.display = 'block';
-    document.getElementById('submitBtn').disabled = true;
-    document.getElementById('submitBtn').innerHTML = '<i class="fas fa-spinner fa-spin"></i> Przetwarzanie...';
-    
-    const progressBar = document.getElementById('progressBar');
-    const progressText = document.getElementById('progressText');
-    const progressPercent = document.getElementById('progressPercent');
-    const statusText = document.getElementById('statusText');
-    
-    // Sprawdź czy przeglądarka obsługuje SSE
-    if (typeof(EventSource) !== "undefined") {
-        console.log('📡 Nawiązuję połączenie SSE...');
-        const eventSource = new EventSource('/geocoding_stream');
-        
-        eventSource.onopen = function(event) {
-            console.log('✅ SSE połączenie nawiązane');
-        };
-        
-        eventSource.onmessage = function(event) {
-            console.log('📥 SSE otrzymano dane:', event.data);
-            const data = JSON.parse(event.data);
-            const progress = data.progress;
-            const current = data.current;
-            const total = data.total;
-            const status = data.status;
-            
-            // Aktualizuj progress bar
-            progressBar.style.width = progress + '%';
-            progressText.textContent = progress + '%';
-            progressPercent.textContent = progress + '%';
-            
-            // Aktualizuj status
-            if (status === 'processing') {
-                statusText.innerHTML = `
-                    <div class="spinner-border spinner-border-sm" role="status"></div>
-                    Geokodowanie: ${current} z ${total} lokalizacji (${progress}%)
-                `;
-            } else if (status === 'completed') {
-                statusText.innerHTML = `
-                    <i class="fas fa-check-circle text-success"></i>
-                    Ukończono geokodowanie ${total} lokalizacji
-                `;
-                
-                eventSource.close();
-                
-                // Pobierz wyniki
-                setTimeout(() => {
-                    window.location.href = '/geocoding_results';
-                }, 1000);
-            }
-        };
-        
-        eventSource.onerror = function(event) {
-            console.error('SSE error:', event);
-            eventSource.close();
-            console.log('🔄 SSE nie działa, fallback do polling...');
-            // Fallback do zwykłego polling
-            startProgressMonitoring();
-        };
-        
-        // Timeout dla SSE - jeśli brak danych przez 10 sekund, przejdź na polling
-        setTimeout(() => {
-            if (eventSource.readyState === EventSource.OPEN) {
-                console.log('⏰ SSE timeout, przechodzę na polling...');
-                eventSource.close();
-                startProgressMonitoring();
-            }
-        }, 10000);
-    } else {
-        // Fallback dla przeglądarek bez SSE
-        startProgressMonitoring();
-    }
-}
-
-function showVercelLoading() {
-    const statusText = document.getElementById('statusText');
-    const progressBar = document.getElementById('progressBar');
-    const progressText = document.getElementById('progressText');
-    const progressPercent = document.getElementById('progressPercent');
-    
-    // Pokaż animowany progress bar bez konkretnych wartości
-    progressBar.style.width = '100%';
-    progressText.textContent = 'Przetwarzanie...';
-    progressPercent.textContent = 'Geokodowanie';
-    
-    statusText.innerHTML = `
-        <div class="spinner-border spinner-border-sm" role="status"></div>
-        Przetwarzanie lokalizacji na Vercel (może potrwać do 5 minut)...
-    `;
-    
-    // Dodaj pulsującą animację
-    progressBar.style.animation = 'progressAnimation 2s ease-in-out infinite';
 }
 
 function resetForm() {

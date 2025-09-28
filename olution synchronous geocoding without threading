@@ -1,0 +1,90 @@
+[1mdiff --git a/appGPT.py b/appGPT.py[m
+[1mindex dfd3b6d..17c2264 100644[m
+[1m--- a/appGPT.py[m
+[1m+++ b/appGPT.py[m
+[36m@@ -4200,51 +4200,17 @@[m [mdef ungeocoded_locations():[m
+                     PROGRESS = 1  # Rozpoczęto[m
+                     CURRENT_ROW = 0[m
+                     [m
+[31m-                    # Jeśli threading nie działa na Vercel, rób synchronicznie ale z logowaniem[m
+[31m-                    try:[m
+[31m-                        import threading[m
+[31m-                        def background_geocoding():[m
+[31m-                            global PROGRESS, CURRENT_ROW, TOTAL_ROWS, PROCESSING_COMPLETE[m
+[31m-                            try:[m
+[31m-                                print("🚀 Rozpoczynam background geokodowanie...")[m
+[31m-                                PROGRESS = 2  # Sygnał że thread się uruchomił[m
+[31m-                                locations_data = get_all_locations_status(df)[m
+[31m-                                [m
+[31m-                                # Zapisz wyniki w cache[m
+[31m-                                locations_cache[f"results_{file_cache_key}"] = {[m
+[31m-                                    'data': locations_data,[m
+[31m-                                    'timestamp': time.time(),[m
+[31m-                                    'ttl': 3600[m
+[31m-                                }[m
+[31m-                                [m
+[31m-                                PROCESSING_COMPLETE = True[m
+[31m-                                PROGRESS = 100[m
+[31m-                                print("✅ Background geokodowanie zakończone!")[m
+[31m-                                [m
+[31m-                            except Exception as e:[m
+[31m-                                print(f"❌ Błąd w background processing: {e}")[m
+[31m-                                import traceback[m
+[31m-                                traceback.print_exc()[m
+[31m-                                PROCESSING_COMPLETE = True[m
+[31m-                                PROGRESS = -1[m
+[31m-                        [m
+[31m-                        thread = threading.Thread(target=background_geocoding)[m
+[31m-                        thread.daemon = True[m
+[31m-                        thread.start()[m
+[31m-                        print("🧵 Thread uruchomiony")[m
+[31m-                        [m
+[31m-                        # Zwróć stronę z progress monitoring[m
+[31m-                        return render_template("upload_for_geocoding.html")[m
+[31m-                        [m
+[31m-                    except Exception as e:[m
+[31m-                        print(f"❌ Threading nie działa na Vercel: {e}")[m
+[31m-                        # Fallback - synchroniczne przetwarzanie[m
+[31m-                        print("🔄 Fallback do synchronicznego przetwarzania...")[m
+[31m-                        locations_data = get_all_locations_status(df)[m
+[31m-                        PROCESSING_COMPLETE = True[m
+[31m-                        PROGRESS = 100[m
+[31m-                        [m
+[31m-                        return render_template("ungeocoded_locations.html", locations_data=locations_data)[m
+[32m+[m[32m                    # Na Vercel threading nie działa stabilnie - użyj synchronicznego przetwarzania[m
+[32m+[m[32m                    print("🔄 Vercel: używam synchronicznego przetwarzania...")[m
+[32m+[m[32m                    locations_data = get_all_locations_status(df)[m
+[32m+[m[32m                    PROCESSING_COMPLETE = True[m
+[32m+[m[32m                    PROGRESS = 100[m
+[32m+[m[41m                    [m
+[32m+[m[32m                    print("✅ Synchroniczne geokodowanie zakończone!")[m
+[32m+[m[32m                    print(f"Poprawne: {len(locations_data['correct_locations'])}")[m
+[32m+[m[32m                    print(f"Do weryfikacji: {len(locations_data['locations'])}")[m
+[32m+[m[41m                    [m
+[32m+[m[32m                    return render_template("ungeocoded_locations.html", locations_data=locations_data)[m
+                     [m
+                 except Exception as e:[m
+                     print(f"Błąd podczas przetwarzania pliku: {str(e)}")[m
+[1mdiff --git a/templates/upload_for_geocoding.html b/templates/upload_for_geocoding.html[m
+[1mindex a38afc3..bcbf1f9 100644[m
+[1m--- a/templates/upload_for_geocoding.html[m
+[1m+++ b/templates/upload_for_geocoding.html[m
+[36m@@ -234,15 +234,9 @@[m [mdocument.getElementById('geocodingForm').addEventListener('submit', function(e)[m
+                         document.write(html);[m
+                         document.close();[m
+                     } else {[m
+[31m-                        // Otrzymaliśmy upload page - rozpocznij monitorowanie z SSE[m
+[31m-                        document.open();[m
+[31m-                        document.write(html);[m
+[31m-                        document.close();[m
+[31m-                        [m
+[31m-                        // Po załadowaniu strony uruchom SSE monitoring[m
+[31m-                        setTimeout(() => {[m
+[31m-                            startSSEProgressMonitoring();[m
+[31m-                        }, 100);[m
+[32m+[m[32m                        // Na Vercel geokodowanie jest synchroniczne - nie potrzebujemy SSE[m
+[32m+[m[32m                        // Jeśli otrzymaliśmy upload page, znaczy że coś poszło nie tak[m
+[32m+[m[32m                        window.location.href = '/ungeocoded_locations';[m
+                     }[m
+                 });[m
+             } else {[m

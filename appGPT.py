@@ -8,8 +8,7 @@ from flask import (
     render_template,
     redirect,
     url_for,
-    session,
-    Response
+    session
 )
 import io
 import time
@@ -74,25 +73,14 @@ DEFAULT_FUEL_COST = 0.40  # Domyślny koszt paliwa EUR/km
 DEFAULT_DRIVER_COST = 210  # Domyślny koszt kierowcy EUR/dzień
 
 # Konfiguracja loggera - zmiana poziomu na ERROR aby ograniczyć logi
-# Na Vercel używamy tylko StreamHandler (system plików jest read-only)
-import os
-if os.environ.get('VERCEL'):
-    # W środowisku Vercel używamy tylko StreamHandler
-    logging.basicConfig(
-        level=logging.ERROR,
-        format='%(message)s',
-        handlers=[logging.StreamHandler()]
-    )
-else:
-    # Lokalnie używamy zarówno FileHandler jak i StreamHandler
-    logging.basicConfig(
-        level=logging.ERROR,
-        format='%(message)s',
-        handlers=[
-            logging.FileHandler('app.log'),
-            logging.StreamHandler()
-        ]
-    )
+logging.basicConfig(
+    level=logging.ERROR,  # Zmieniono z INFO na ERROR
+    format='%(message)s',  # Uproszczony format bez timestampów
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # Wyłączenie debugowych logów urllib3
@@ -115,57 +103,13 @@ route_logger.propagate = False  # Zapobiegamy propagacji logów do rodzica
 # Inicjalizacja geolokatora
 geolocator = Nominatim(user_agent="wycena_transportu", timeout=15)
 
-# Inicjalizacja pamięci podręcznych - dostosowane do środowiska Vercel
-if os.environ.get('VERCEL'):
-    # W środowisku Vercel używamy prostych słowników w pamięci (brak możliwości zapisu na dysk)
-    geo_cache = {}
-    route_cache = {}
-    locations_cache = {}
-    
-    # Dodajemy podstawowe metody cache'a jako funkcje wrapper
-    class SimpleCache:
-        def __init__(self, cache_dict):
-            self.cache = cache_dict
-            
-        def get(self, key, default=None):
-            return self.cache.get(key, default)
-            
-        def set(self, key, value):
-            # Ograniczamy rozmiar cache'a w pamięci
-            if len(self.cache) > 1000:
-                # Usuwamy najstarsze wpisy (prosty FIFO)
-                keys_to_remove = list(self.cache.keys())[:100]
-                for k in keys_to_remove:
-                    del self.cache[k]
-            self.cache[key] = value
-            
-        def __contains__(self, key):
-            return key in self.cache
-            
-        def __getitem__(self, key):
-            return self.cache[key]
-            
-        def __setitem__(self, key, value):
-            self.set(key, value)
-    
-    geo_cache = SimpleCache(geo_cache)
-    route_cache = SimpleCache(route_cache)
-    locations_cache = SimpleCache(locations_cache)
-else:
-    # Lokalnie używamy normalnych cache'ów na dysku
-    geo_cache = Cache("geo_cache")
-    route_cache = Cache("route_cache")
-    locations_cache = Cache("locations_cache")
+# Inicjalizacja pamięci podręcznych
+geo_cache = Cache("geo_cache")
+route_cache = Cache("route_cache")
+locations_cache = Cache("locations_cache")
 
-# Inicjalizacja menedżera PTV (lazy loading)
-ptv_manager = None
-
-def get_ptv_manager():
-    """Lazy loading PTV manager"""
-    global ptv_manager
-    if ptv_manager is None:
-        ptv_manager = PTVRouteManager(PTV_API_KEY)
-    return ptv_manager
+# Inicjalizacja menedżera PTV
+ptv_manager = PTVRouteManager(PTV_API_KEY)
 
 # Zmienne globalne do śledzenia postępu
 PROGRESS = 0
@@ -917,10 +861,6 @@ def get_region_based_rates(lc, lp, uc, up):
         }
 
     try:
-        # Sprawdź czy pliki istnieją przed próbą wczytania
-        if not os.path.exists("historical_rates.xlsx") or not os.path.exists("historical_rates_gielda.xlsx"):
-            raise FileNotFoundError("Pliki historycznych stawek nie zostały znalezione")
-            
         hist_df = pd.read_excel("historical_rates.xlsx",
                                 dtype={'kod pocztowy zaladunku': str, 'kod pocztowy rozladunku': str})
         gielda_df = pd.read_excel("historical_rates_gielda.xlsx",
@@ -1041,10 +981,6 @@ def get_region_based_rates(lc, lp, uc, up):
 
 # Funkcja wczytująca dane z global_data.csv – klucze tworzymy jako stringi, np. "Poland_36"
 def load_global_data(filepath):
-    if not os.path.exists(filepath):
-        print(f"Plik {filepath} nie istnieje - pomijam ładowanie danych globalnych")
-        return
-        
     with open(filepath, newline='', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile, delimiter=",")
         for row in reader:
@@ -1081,29 +1017,10 @@ def sync_geo_cache_with_lookup():
     return synced_count
 
 
-# Funkcja inicjalizująca aplikację
-def initialize_app():
-    """Inicjalizuje wszystkie dane aplikacji"""
-    try:
-        print("Inicjalizacja aplikacji...")
-        load_global_data("global_data.csv")
-        sync_geo_cache_with_lookup()  # Synchronizuj cache
-        load_region_mapping()  # Wczytaj mapowania regionów
-        load_caches()
-        load_margin_matrix()  # Wczytaj domyślną macierz marży (Matrix.xlsx)
-        print("Inicjalizacja aplikacji zakończona pomyślnie")
-    except Exception as e:
-        print(f"Błąd podczas inicjalizacji aplikacji: {e}")
-
-# Inicjalizacja będzie wykonana przy pierwszym użyciu (lazy loading)
-_app_initialized = False
-
-def ensure_app_initialized():
-    """Zapewnia że aplikacja jest zainicjalizowana (lazy loading)"""
-    global _app_initialized
-    if not _app_initialized:
-        initialize_app()
-        _app_initialized = True
+# Na starcie aplikacji
+load_global_data("global_data.csv")
+sync_geo_cache_with_lookup()  # Synchronizuj cache
+load_region_mapping()  # Wczytaj mapowania regionów
 
 
 def clean_text(text):
@@ -1918,12 +1835,8 @@ def get_all_locations_status(df):
     print(f"Zebrano {len(unique_locations)} unikalnych lokalizacji do sprawdzenia")
 
     # Inicjalizuj zmienne postępu
-    global PROGRESS, CURRENT_ROW, TOTAL_ROWS
     GEOCODING_TOTAL = len(unique_locations)
     GEOCODING_CURRENT = 0
-    TOTAL_ROWS = len(unique_locations)
-    PROGRESS = 0
-    CURRENT_ROW = 0
 
     location_id = 1  # Dodajemy licznik dla ID lokalizacji
     for loc in unique_locations:
@@ -2022,12 +1935,6 @@ def get_all_locations_status(df):
 
         # Aktualizuj postęp
         GEOCODING_CURRENT += 1
-        CURRENT_ROW += 1
-        PROGRESS = int((CURRENT_ROW / TOTAL_ROWS) * 100)
-        
-        # Na Vercel wyświetl postęp w konsoli
-        if os.environ.get('VERCEL'):
-            print(f"Postęp geokodowania: {PROGRESS}% ({CURRENT_ROW}/{TOTAL_ROWS})")
 
     print(f"Znaleziono {len(ungeocoded_locations)} nierozpoznanych lokalizacji")
     print(f"Znaleziono {len(geocoded_locations)} rozpoznanych lokalizacji")
@@ -2133,23 +2040,6 @@ def load_margin_matrix(matrix_file='Matrix.xlsx'):
         pandas.DataFrame: Macierz marży z regionami jako indeksy (załadunek) i kolumny (rozładunek)
     """
     global MARGIN_MATRIX, CURRENT_MATRIX_FILE
-    
-    # Sprawdź czy plik istnieje, jeśli nie - użyj domyślnej macierzy
-    if not os.path.exists(matrix_file):
-        print(f"Plik {matrix_file} nie istnieje - używam domyślnej macierzy marży")
-        # Tworzymy prostą macierz marży z podstawowymi regionami
-        regions = ['PL', 'DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'CZ', 'AT', 'SK']
-        default_margin = 1.15  # 15% marży
-        
-        MARGIN_MATRIX = pd.DataFrame(
-            default_margin, 
-            index=regions, 
-            columns=regions
-        )
-        CURRENT_MATRIX_FILE = f'default_fallback_for_{matrix_file}'
-        
-        logger.info(f"Utworzono domyślną macierz marży: {MARGIN_MATRIX.shape[0]}x{MARGIN_MATRIX.shape[1]} regionów")
-        return MARGIN_MATRIX
     
     try:
         # Wczytaj plik Excel bez nagłówków
@@ -2482,14 +2372,14 @@ def get_toll_cost(
         if is_route_to_or_from_switzerland(loading_country, unloading_country):
             avoid_switzerland = False
     
-    result = get_ptv_manager().get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
+    result = ptv_manager.get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
     if result and 'toll_cost' in result:
         return result['toll_cost']
     return None
 
 
 def get_route_distance(coord_from, coord_to, avoid_switzerland=True, routing_mode=DEFAULT_ROUTING_MODE):
-    result = get_ptv_manager().get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
+    result = ptv_manager.get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
     return result
 
 
@@ -2800,10 +2690,6 @@ def evaluate_geocoding_reliability(quality, source):
 
 def get_all_rates(lc, lp, uc, up, lc_coords, uc_coords):
     try:
-        # Sprawdź czy pliki istnieją przed próbą wczytania
-        if not os.path.exists("historical_rates.xlsx") or not os.path.exists("historical_rates_gielda.xlsx"):
-            raise FileNotFoundError("Pliki historycznych stawek nie zostały znalezione")
-            
         historical_rates_df = pd.read_excel("historical_rates.xlsx",
                                             dtype={'kod pocztowy zaladunku': str, 'kod pocztowy rozladunku': str})
         historical_rates_gielda_df = pd.read_excel("historical_rates_gielda.xlsx",
@@ -3383,16 +3269,17 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
             # Sprawdź czy w wierszu jest zdefiniowana wartość transit time
             transit_time_from_file = get_transit_time_from_row(row)
             
-            # Oblicz driver_days zawsze na podstawie dystansu (standardowa logika biznesowa)
-            driver_days = calculate_driver_days(dist_ptv)
-            
             if transit_time_from_file is not None:
-                print(f"Wiersz {i+1}: Transit time z pliku: {transit_time_from_file} dni, Driver days obliczone: {driver_days} dni")
+                # Użyj wartości z pliku
+                driver_days = transit_time_from_file
+                print(f"Wiersz {i+1}: Użyto transit time z pliku: {driver_days} dni")
             else:
+                # Oblicz standardowo na podstawie dystansu
+                driver_days = calculate_driver_days(dist_ptv)
                 if 'transit time' in row.index:
-                    print(f"Wiersz {i+1}: Kolumna transit time pusta - driver days obliczone z dystansu: {driver_days} dni")
+                    print(f"Wiersz {i+1}: Kolumna transit time pusta - obliczono z dystansu: {driver_days} dni")
                 else:
-                    print(f"Wiersz {i+1}: Brak kolumny transit time - driver days obliczone z dystansu: {driver_days} dni")
+                    print(f"Wiersz {i+1}: Brak kolumny transit time - obliczono z dystansu: {driver_days} dni")
 
             driver_cost_value = driver_days * driver_cost if driver_days is not None else None
 
@@ -3855,11 +3742,6 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
 
 
 def save_caches():
-    # Na Vercel pomijaj zapisywanie cache do plików joblib
-    if os.environ.get('VERCEL'):
-        print("Środowisko Vercel: pomijam zapisywanie cache do plików joblib")
-        return
-        
     try:
         geo_dict = {key: geo_cache[key] for key in geo_cache}
         route_dict = {key: route_cache[key] for key in route_cache}
@@ -3871,11 +3753,6 @@ def save_caches():
 
 
 def load_caches():
-    # Na Vercel pomijaj ładowanie cache z plików joblib
-    if os.environ.get('VERCEL'):
-        print("Środowisko Vercel: pomijam ładowanie cache z plików joblib")
-        return
-        
     try:
         if os.path.exists('geo_cache_backup.joblib'):
             geo_cache_data = joblib.load('geo_cache_backup.joblib')
@@ -3912,24 +3789,15 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max-limit
 app.config['SECRET_KEY'] = 'your-secret-key-123'  # Klucz do szyfrowania sesji
 
-# Konfiguracja logowania - dostosowana do środowiska Vercel
-if os.environ.get('VERCEL'):
-    # W środowisku Vercel używamy tylko StreamHandler
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[logging.StreamHandler()]
-    )
-else:
-    # Lokalnie używamy zarówno FileHandler jak i StreamHandler
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler('app.log'),
-            logging.StreamHandler()
-        ]
-    )
+# Konfiguracja logowania
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
 
 # Dodanie filtra postępu do loggera
 class FilterProgress(logging.Filter):
@@ -3967,7 +3835,6 @@ def show_cache():
 
 @app.route("/", methods=["GET", "POST"])
 def upload_file():
-    ensure_app_initialized()  # Lazy loading
     if request.method == "POST":
         try:
             file = request.files.get("file")
@@ -4004,13 +3871,9 @@ def upload_file():
             return render_template("processing.html")
         except Exception as e:
             return render_template("error.html", message=str(e))
-    response = render_template("upload.html", 
+    return render_template("upload.html", 
                          default_fuel_cost=DEFAULT_FUEL_COST,
                          default_driver_cost=DEFAULT_DRIVER_COST)
-    # Dodaj cache headers dla lepszej wydajności
-    response = app.make_response(response)
-    response.headers['Cache-Control'] = 'public, max-age=300'  # 5 minut cache
-    return response
 
 
 @app.route("/download")
@@ -4090,7 +3953,7 @@ def clear_locations_cache_endpoint():
 
 @app.route("/ptv_stats")
 def ptv_stats():
-    stats = get_ptv_manager().get_stats()
+    stats = ptv_manager.get_stats()
     return jsonify(stats)
 
 
@@ -4137,145 +4000,50 @@ def ungeocoded_locations():
             if not file:
                 return render_template("error.html", message="Nie wybrano pliku")
 
-            # Na Vercel, przetwarzaj synchronicznie (bez background threads)
-            if os.environ.get('VERCEL'):
-                try:
-                    # Reset zmiennych progress aby nie pozostały stare wartości
-                    global PROGRESS, CURRENT_ROW, TOTAL_ROWS, PROCESSING_COMPLETE
-                    PROGRESS = 0
-                    CURRENT_ROW = 0
-                    TOTAL_ROWS = 0
-                    PROCESSING_COMPLETE = False
-                    
-                    file_bytes = file.read()
-                    # Wczytaj dane z Excela, zachowując kody pocztowe jako tekst
-                    df = pd.read_excel(
-                        io.BytesIO(file_bytes),
-                        dtype={
-                            'kod pocztowy zaladunku': str,
-                            'kod pocztowy rozladunku': str,
-                            'kod_pocztowy_zaladunku': str,
-                            'kod_pocztowy_rozladunku': str
-                        }
-                    )
-                    print("Kolumny w pliku Excel:", df.columns.tolist())
-                    
-                    # Policz unikalne lokalizacje dla informacji użytkownika
-                    unique_locations = set()
-                    for _, row in df.iterrows():
-                        try:
-                            kraj_zal = str(row.get('kraj zaladunku', '')).strip()
-                            if kraj_zal.lower() in ['kraj zaladunku', 'kraj załadunku', '']:
-                                continue
-                            kod_zal = str(row.get('kod pocztowy zaladunku', '')).strip()
-                            miasto_zal = str(row.get('miasto zaladunku', '')).strip()
-                            kraj_rozl = str(row.get('kraj rozladunku', '')).strip()
-                            kod_rozl = str(row.get('kod pocztowy rozladunku', '')).strip()
-                            miasto_rozl = str(row.get('miasto rozladunku', '')).strip()
-                            
-                            if kraj_zal and kod_zal:
-                                unique_locations.add((kraj_zal, kod_zal, miasto_zal))
-                            if kraj_rozl and kod_rozl:
-                                unique_locations.add((kraj_rozl, kod_rozl, miasto_rozl))
-                        except Exception as e:
-                            continue
-                    
-                    total_locations = len(unique_locations)
-                    print(f"Przetwarzanie {total_locations} unikalnych lokalizacji...")
-                    print(f"Szacowany czas: {total_locations * 0.5:.0f}-{total_locations * 1:.0f} sekund")
-                    
-                    # Zapisz dane w cache dla background processing
-                    file_cache_key = f"file_{hash(file_bytes)}"
-                    locations_cache[file_cache_key] = {
-                        'df': df,
-                        'timestamp': time.time(),
-                        'ttl': 3600
-                    }
-                    
-                    # Na Vercel threading może nie działać - spróbuj synchronicznie z SSE
-                    print("Uruchamiam geokodowanie...")
-                    
-                    # Ustawienia początkowe dla SSE
-                    TOTAL_ROWS = total_locations
-                    PROGRESS = 1  # Rozpoczęto
-                    CURRENT_ROW = 0
-                    
-                    # Na Vercel - ograniczone przetwarzanie z timeout protection
-                    print(f"🔄 Vercel: przetwarzam maksymalnie 100 lokalizacji (z {total_locations})...")
-                    
-                    if total_locations > 100:
-                        # Ogranicz do 100 lokalizacji aby uniknąć timeout
-                        print(f"⚠️ Za dużo lokalizacji ({total_locations}). Ograniczam do 100 pierwszych.")
-                        # Weź tylko pierwsze 100 wierszy
-                        df_limited = df.head(100)
-                        locations_data = get_all_locations_status(df_limited)
-                        
-                        # Dodaj informację o ograniczeniu
-                        locations_data['warning'] = f"Przetworzono tylko 100 pierwszych lokalizacji z {total_locations}. Podziel plik na mniejsze części."
-                    else:
-                        locations_data = get_all_locations_status(df)
-                    
-                    PROCESSING_COMPLETE = True
-                    PROGRESS = 100
-                    
-                    print("✅ Synchroniczne geokodowanie zakończone!")
-                    print(f"Poprawne: {len(locations_data['correct_locations'])}")
-                    print(f"Do weryfikacji: {len(locations_data['locations'])}")
-                    
-                    return render_template("ungeocoded_locations.html", locations_data=locations_data)
-                    
-                except Exception as e:
-                    print(f"Błąd podczas przetwarzania pliku: {str(e)}")
-                    return render_template("error.html", message=f"Błąd podczas przetwarzania pliku: {str(e)}")
-            else:
-                # Lokalne środowisko - używaj background processing
-                data_timestamp = str(time.time())
-                file_bytes = file.read()
-                data_size = str(len(file_bytes))
-                cache_key = hashlib.md5(f"{data_timestamp}_{data_size}".encode()).hexdigest()
-                
-                # Zapisz klucz w sesji
-                session['locations_cache_key'] = cache_key
-                session['processing_status'] = 'running'
-                
-                # Uruchom przetwarzanie w tle
-                thread = threading.Thread(target=background_geocoding_processing, args=(file_bytes, cache_key))
-                thread.daemon = True
-                thread.start()
-                
-                # Zwróć stronę z paskiem postępu
-                return render_template("processing.html", processing_type="geocoding")
+            # Wygeneruj unikalny klucz dla danych
+            data_timestamp = str(time.time())
+            file_bytes = file.read()
+            data_size = str(len(file_bytes))
+            cache_key = hashlib.md5(f"{data_timestamp}_{data_size}".encode()).hexdigest()
+            
+            # Zapisz klucz w sesji
+            session['locations_cache_key'] = cache_key
+            session['processing_status'] = 'running'
+            
+            # Uruchom przetwarzanie w tle
+            thread = threading.Thread(target=background_geocoding_processing, args=(file_bytes, cache_key))
+            thread.daemon = True
+            thread.start()
+            
+            # Zwróć stronę z paskiem postępu
+            return render_template("processing.html", processing_type="geocoding")
             
         except Exception as e:
             print(f"Błąd podczas przetwarzania pliku: {str(e)}")
             return render_template("error.html", message=f"Błąd podczas przetwarzania pliku: {str(e)}")
     
-    # Dla GET - tylko w środowisku lokalnym (Vercel nie potrzebuje tego)
-    if not os.environ.get('VERCEL'):
-        cache_key = session.get('locations_cache_key')
-        locations_data = None
-        
-        if cache_key:
-            try:
-                locations_data = locations_cache.get(cache_key)
-                if locations_data:
-                    if 'error' in locations_data:
-                        return render_template("error.html", message=f"Błąd podczas przetwarzania: {locations_data['error']}")
-                        
-                    print(f"Pobrano dane z cache z kluczem: {cache_key}")
-                    session['processing_status'] = 'completed'
-                else:
-                    print(f"Brak danych w cache dla klucza: {cache_key}")
-                    # Usuń nieważny klucz z sesji
-                    session.pop('locations_cache_key', None)
-            except Exception as e:
-                print(f"Błąd pobierania z cache: {e}")
+    # Dla GET, spróbuj pobrać dane z cache za pomocą klucza z sesji
+    cache_key = session.get('locations_cache_key')
+    locations_data = None
+    
+    if cache_key:
+        try:
+            locations_data = locations_cache.get(cache_key)
+            if locations_data:
+                if 'error' in locations_data:
+                    return render_template("error.html", message=f"Błąd podczas przetwarzania: {locations_data['error']}")
+                    
+                print(f"Pobrano dane z cache z kluczem: {cache_key}")
+                session['processing_status'] = 'completed'
+            else:
+                print(f"Brak danych w cache dla klucza: {cache_key}")
+                # Usuń nieważny klucz z sesji
                 session.pop('locations_cache_key', None)
-        
-        return render_template("ungeocoded_locations.html", locations_data=locations_data)
-    else:
-        # Na Vercel, GET bez danych - pokaż pustą stronę
-        return render_template("ungeocoded_locations.html", locations_data=None)
+        except Exception as e:
+            print(f"Błąd pobierania z cache: {e}")
+            session.pop('locations_cache_key', None)
+    
+    return render_template("ungeocoded_locations.html", locations_data=locations_data)
 
 
 @app.route("/save_manual_coordinates", methods=['POST'])
@@ -4295,7 +4063,6 @@ def save_manual_coordinates():
 
 @app.route("/test_route_form", methods=['GET', 'POST'])
 def test_route_form():
-    ensure_app_initialized()  # Lazy loading
     if request.method == 'POST':
         load_country = request.form.get('load_country', '').strip().upper()
         load_postal = request.form.get('load_postal', '').strip()
@@ -4362,10 +4129,7 @@ def test_route_form():
         except Exception as e:
             return render_template("error.html", message=str(e))
 
-    response = render_template("test_route_form.html")
-    response = app.make_response(response)
-    response.headers['Cache-Control'] = 'public, max-age=300'  # 5 minut cache
-    return response
+    return render_template("test_route_form.html")
 
 @app.route("/test_route_result")
 def test_route_result():
@@ -4462,14 +4226,30 @@ def test_truck_route():
         # Obliczanie kosztu paliwa (używa przekazanej wartości)
         fuel_cost_value = dist * fuel_cost if dist is not None else None
         
-        # Oblicz transit_time jeśli nie został przekazany
-        if transit_time is None and dist is not None:
-            # Użyj prostej formuły: 1 dzień na każde 600km + 0.5 dnia na start/koniec
-            transit_time = max(0.5, (dist / 600) + 0.5)
-            transit_time = round(transit_time * 4) / 4  # Zaokrąglij do 0.25
-        
-        # Oblicz driver_days używając dedykowanej funkcji
-        driver_days = calculate_driver_days(dist)
+        # Użyj transit_time jeśli został przekazany, w przeciwnym razie oblicz na podstawie dystansu
+        if transit_time is not None:
+            driver_days = transit_time
+        elif dist is not None:
+            if dist <= 350:
+                driver_days = 1
+            elif 351 <= dist <= 500:
+                driver_days = 1.25
+            elif 501 <= dist <= 700:
+                driver_days = 1.5
+            elif 701 <= dist <= 1100:
+                driver_days = 2
+            elif 1101 <= dist <= 1700:
+                driver_days = 3
+            elif 1701 <= dist <= 2300:
+                driver_days = 4
+            elif 2301 <= dist <= 2900:
+                driver_days = 5
+            elif 2901 <= dist <= 3500:
+                driver_days = 6
+            else:
+                driver_days = None
+        else:
+            driver_days = None
             
         driver_cost_value = driver_days * driver_cost if driver_days is not None else None
         
@@ -4533,9 +4313,12 @@ def test_truck_route():
         loading_region = get_region(normalize_country(test_row['Kraj załadunku']), test_row['Kod pocztowy załadunku'])
         unloading_region = get_region(normalize_country(test_row['Kraj rozładunku']), test_row['Kod pocztowy rozładunku'])
         
-        # Oblicz dni kierowcy na podstawie dystansu (nie transit_time!)
+        # Oblicz dni kierowcy - użyj przekazanego transit_time lub oblicz na podstawie dystansu
         distance = test_row.get('Dystans PTV (km)', 0) or 0
-        driver_days_for_profit = calculate_driver_days(distance)
+        if transit_time is not None:
+            driver_days_for_profit = transit_time
+        else:
+            driver_days_for_profit = calculate_driver_days(distance)
         
         # Oblicz oczekiwany zysk
         expected_profit, unit_margin, margin_source = calculate_expected_profit(
@@ -4584,8 +4367,7 @@ def test_truck_route():
             'sugerowany_fracht_matrix': safe_value(format_currency(suggested_fracht_matrix)),
             'oczekiwany_zysk': safe_value(format_currency(expected_profit)),
             'marga_jednostkowa': safe_value(format_currency(unit_margin)),
-            'transit_time_dni': safe_value(transit_time),
-            'driver_days': safe_value(driver_days),
+            'transit_time_dni': safe_value(driver_days),
             'loading_region': loading_region or 'Nieznany',
             'unloading_region': unloading_region or 'Nieznany',
             'kraje': countries,
@@ -4829,7 +4611,7 @@ def get_route_distance(coord_from, coord_to, loading_country=None, unloading_cou
         if is_route_to_or_from_switzerland(loading_country, unloading_country):
             avoid_switzerland = False
     
-    result = get_ptv_manager().get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
+    result = ptv_manager.get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
     return result
 
 def calculate_podlot_from_data(df, description="podlot"):
@@ -4901,18 +4683,8 @@ def calculate_weighted_podlot(podlot_hist, z_hist, podlot_gielda, z_gielda):
 @app.route("/geocoding_progress")
 def geocoding_progress():
     """Endpoint do śledzenia postępu geokodowania"""
-    global GEOCODING_CURRENT, GEOCODING_TOTAL, PROGRESS, CURRENT_ROW, TOTAL_ROWS
+    global GEOCODING_CURRENT, GEOCODING_TOTAL
     
-    # Na Vercel, geokodowanie jest synchroniczne, ale możemy zwrócić aktualny postęp
-    if os.environ.get('VERCEL'):
-        return jsonify({
-            'progress': PROGRESS,
-            'current': CURRENT_ROW,
-            'total': TOTAL_ROWS,
-            'status': 'completed' if PROGRESS >= 100 else 'processing'
-        })
-    
-    # Lokalne środowisko - używaj globalnych zmiennych
     if GEOCODING_TOTAL > 0:
         progress = int((GEOCODING_CURRENT / GEOCODING_TOTAL) * 100)
         return jsonify({
@@ -4929,91 +4701,16 @@ def geocoding_progress():
             'status': 'idle'
         })
 
-@app.route("/geocoding_stream")
-def geocoding_stream():
-    """Server-Sent Events endpoint dla real-time postępu geokodowania"""
-    import json
-    import time
-    
-    print("🔄 SSE endpoint wywołany")
-    
-    def generate():
-        global PROGRESS, CURRENT_ROW, TOTAL_ROWS
-        last_progress = -1
-        start_time = time.time()
-        max_iterations = 600  # 5 minut timeout
-        iterations = 0
-        
-        print(f"📊 Początkowy stan: PROGRESS={PROGRESS}, CURRENT_ROW={CURRENT_ROW}, TOTAL_ROWS={TOTAL_ROWS}")
-        
-        while iterations < max_iterations:
-            current_progress = PROGRESS
-            iterations += 1
-            
-            # Wyślij update tylko gdy postęp się zmienił lub co 2 sekundy
-            elapsed = time.time() - start_time
-            if current_progress != last_progress or elapsed > 2:
-                data = {
-                    'progress': current_progress,
-                    'current': CURRENT_ROW,
-                    'total': TOTAL_ROWS,
-                    'status': 'completed' if current_progress >= 100 else 'processing',
-                    'elapsed': int(elapsed),
-                    'iteration': iterations
-                }
-                
-                print(f"📡 SSE wysyłam: {data}")
-                yield f"data: {json.dumps(data)}\n\n"
-                last_progress = current_progress
-                start_time = time.time()
-                
-                # Zakończ stream gdy ukończono
-                if current_progress >= 100 or current_progress < 0:
-                    print(f"✅ SSE stream zakończony, progress={current_progress}")
-                    break
-            
-            # Krótka pauza
-            time.sleep(0.5)
-        
-        print(f"⏰ SSE stream timeout po {iterations} iteracjach")
-    
-    return Response(generate(), mimetype='text/event-stream', headers={
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*'
-    })
-
-@app.route("/geocoding_results")
-def geocoding_results():
-    """Endpoint do pobrania wyników geokodowania"""
-    global PROCESSING_COMPLETE
-    
-    if PROCESSING_COMPLETE:
-        # Spróbuj znaleźć wyniki w cache lub wygeneruj je ponownie
-        try:
-            # Jeśli mamy wyniki w cache, użyj ich
-            for key in locations_cache:
-                if key.startswith('results_'):
-                    cached_data = locations_cache[key]
-                    if time.time() - cached_data['timestamp'] < cached_data['ttl']:
-                        return render_template("ungeocoded_locations.html", 
-                                             locations_data=cached_data['data'])
-            
-            # Jeśli nie ma w cache, zwróć komunikat o zakończeniu
-            return jsonify({'status': 'completed', 'message': 'Geokodowanie zakończone'})
-        except Exception as e:
-            return render_template("error.html", message=f"Błąd podczas pobierania wyników: {str(e)}")
-    else:
-        return jsonify({'status': 'processing', 'message': 'Geokodowanie w toku'})
-
-# Inicjalizacja już wykonana w initialize_app()
-
 if __name__ == '__main__':
+    load_caches()
+    load_margin_matrix()  # Wczytaj domyślną macierz marży (Matrix.xlsx)
     log = logging.getLogger('werkzeug')
+
 
     class FilterProgress(logging.Filter):
         def filter(self, record):
             return "/progress" not in record.getMessage()
+
 
     log.addFilter(FilterProgress())
     app.run(debug=True, host='0.0.0.0')

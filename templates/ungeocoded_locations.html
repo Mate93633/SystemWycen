@@ -187,14 +187,6 @@
 
 {% block content %}
 {% if locations_data %}
-<!-- Warning about limited processing -->
-{% if locations_data.warning %}
-<div class="alert alert-warning" role="alert">
-    <i class="fas fa-exclamation-triangle"></i>
-    <strong>Uwaga:</strong> {{ locations_data.warning }}
-</div>
-{% endif %}
-
 <div class="card">
     <div class="card-body">
         <div class="stats-grid">
