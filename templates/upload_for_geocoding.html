@@ -319,6 +319,8 @@ function startProgressMonitoring() {
 }
 
 function startSSEProgressMonitoring() {
+    console.log('🚀 Uruchamiam SSE progress monitoring...');
+    
     // Pokaż progress container
     document.getElementById('progressContainer').style.display = 'block';
     document.getElementById('submitBtn').disabled = true;
@@ -331,9 +333,15 @@ function startSSEProgressMonitoring() {
     
     // Sprawdź czy przeglądarka obsługuje SSE
     if (typeof(EventSource) !== "undefined") {
+        console.log('📡 Nawiązuję połączenie SSE...');
         const eventSource = new EventSource('/geocoding_stream');
         
+        eventSource.onopen = function(event) {
+            console.log('✅ SSE połączenie nawiązane');
+        };
+        
         eventSource.onmessage = function(event) {
+            console.log('📥 SSE otrzymano dane:', event.data);
             const data = JSON.parse(event.data);
             const progress = data.progress;
             const current = data.current;
@@ -369,9 +377,19 @@ function startSSEProgressMonitoring() {
         eventSource.onerror = function(event) {
             console.error('SSE error:', event);
             eventSource.close();
+            console.log('🔄 SSE nie działa, fallback do polling...');
             // Fallback do zwykłego polling
             startProgressMonitoring();
         };
+        
+        // Timeout dla SSE - jeśli brak danych przez 10 sekund, przejdź na polling
+        setTimeout(() => {
+            if (eventSource.readyState === EventSource.OPEN) {
+                console.log('⏰ SSE timeout, przechodzę na polling...');
+                eventSource.close();
+                startProgressMonitoring();
+            }
+        }, 10000);
     } else {
         // Fallback dla przeglądarek bez SSE
         startProgressMonitoring();

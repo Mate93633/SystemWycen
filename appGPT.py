@@ -4192,36 +4192,59 @@ def ungeocoded_locations():
                         'ttl': 3600
                     }
                     
-                    # Uruchom background processing
-                    import threading
-                    def background_geocoding():
-                        global PROGRESS, CURRENT_ROW, TOTAL_ROWS, PROCESSING_COMPLETE
-                        try:
-                            print("Rozpoczynam background geokodowanie...")
-                            locations_data = get_all_locations_status(df)
-                            
-                            # Zapisz wyniki w cache
-                            locations_cache[f"results_{file_cache_key}"] = {
-                                'data': locations_data,
-                                'timestamp': time.time(),
-                                'ttl': 3600
-                            }
-                            
-                            PROCESSING_COMPLETE = True
-                            PROGRESS = 100
-                            print("Background geokodowanie zakończone!")
-                            
-                        except Exception as e:
-                            print(f"Błąd w background processing: {e}")
-                            PROCESSING_COMPLETE = True
-                            PROGRESS = -1
+                    # Na Vercel threading może nie działać - spróbuj synchronicznie z SSE
+                    print("Uruchamiam geokodowanie...")
                     
-                    thread = threading.Thread(target=background_geocoding)
-                    thread.daemon = True
-                    thread.start()
+                    # Ustawienia początkowe dla SSE
+                    TOTAL_ROWS = total_locations
+                    PROGRESS = 1  # Rozpoczęto
+                    CURRENT_ROW = 0
                     
-                    # Zwróć stronę z progress monitoring (nie wyniki!)
-                    return render_template("upload_for_geocoding.html")
+                    # Jeśli threading nie działa na Vercel, rób synchronicznie ale z logowaniem
+                    try:
+                        import threading
+                        def background_geocoding():
+                            global PROGRESS, CURRENT_ROW, TOTAL_ROWS, PROCESSING_COMPLETE
+                            try:
+                                print("🚀 Rozpoczynam background geokodowanie...")
+                                PROGRESS = 2  # Sygnał że thread się uruchomił
+                                locations_data = get_all_locations_status(df)
+                                
+                                # Zapisz wyniki w cache
+                                locations_cache[f"results_{file_cache_key}"] = {
+                                    'data': locations_data,
+                                    'timestamp': time.time(),
+                                    'ttl': 3600
+                                }
+                                
+                                PROCESSING_COMPLETE = True
+                                PROGRESS = 100
+                                print("✅ Background geokodowanie zakończone!")
+                                
+                            except Exception as e:
+                                print(f"❌ Błąd w background processing: {e}")
+                                import traceback
+                                traceback.print_exc()
+                                PROCESSING_COMPLETE = True
+                                PROGRESS = -1
+                        
+                        thread = threading.Thread(target=background_geocoding)
+                        thread.daemon = True
+                        thread.start()
+                        print("🧵 Thread uruchomiony")
+                        
+                        # Zwróć stronę z progress monitoring
+                        return render_template("upload_for_geocoding.html")
+                        
+                    except Exception as e:
+                        print(f"❌ Threading nie działa na Vercel: {e}")
+                        # Fallback - synchroniczne przetwarzanie
+                        print("🔄 Fallback do synchronicznego przetwarzania...")
+                        locations_data = get_all_locations_status(df)
+                        PROCESSING_COMPLETE = True
+                        PROGRESS = 100
+                        
+                        return render_template("ungeocoded_locations.html", locations_data=locations_data)
                     
                 except Exception as e:
                     print(f"Błąd podczas przetwarzania pliku: {str(e)}")
@@ -4934,13 +4957,20 @@ def geocoding_stream():
     import json
     import time
     
+    print("🔄 SSE endpoint wywołany")
+    
     def generate():
         global PROGRESS, CURRENT_ROW, TOTAL_ROWS
         last_progress = -1
         start_time = time.time()
+        max_iterations = 600  # 5 minut timeout
+        iterations = 0
         
-        while True:
+        print(f"📊 Początkowy stan: PROGRESS={PROGRESS}, CURRENT_ROW={CURRENT_ROW}, TOTAL_ROWS={TOTAL_ROWS}")
+        
+        while iterations < max_iterations:
             current_progress = PROGRESS
+            iterations += 1
             
             # Wyślij update tylko gdy postęp się zmienił lub co 2 sekundy
             elapsed = time.time() - start_time
@@ -4950,22 +4980,29 @@ def geocoding_stream():
                     'current': CURRENT_ROW,
                     'total': TOTAL_ROWS,
                     'status': 'completed' if current_progress >= 100 else 'processing',
-                    'elapsed': int(elapsed)
+                    'elapsed': int(elapsed),
+                    'iteration': iterations
                 }
+                
+                print(f"📡 SSE wysyłam: {data}")
                 yield f"data: {json.dumps(data)}\n\n"
                 last_progress = current_progress
                 start_time = time.time()
                 
                 # Zakończ stream gdy ukończono
-                if current_progress >= 100:
+                if current_progress >= 100 or current_progress < 0:
+                    print(f"✅ SSE stream zakończony, progress={current_progress}")
                     break
             
             # Krótka pauza
             time.sleep(0.5)
+        
+        print(f"⏰ SSE stream timeout po {iterations} iteracjach")
     
     return Response(generate(), mimetype='text/event-stream', headers={
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive'
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*'
     })
 
 @app.route("/geocoding_results")
