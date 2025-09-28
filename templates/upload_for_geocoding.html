@@ -234,15 +234,9 @@ document.getElementById('geocodingForm').addEventListener('submit', function(e) 
                         document.write(html);
                         document.close();
                     } else {
-                        // Otrzymaliśmy upload page - rozpocznij monitorowanie z SSE
-                        document.open();
-                        document.write(html);
-                        document.close();
-                        
-                        // Po załadowaniu strony uruchom SSE monitoring
-                        setTimeout(() => {
-                            startSSEProgressMonitoring();
-                        }, 100);
+                        // Na Vercel geokodowanie jest synchroniczne - nie potrzebujemy SSE
+                        // Jeśli otrzymaliśmy upload page, znaczy że coś poszło nie tak
+                        window.location.href = '/ungeocoded_locations';
                     }
                 });
             } else {
