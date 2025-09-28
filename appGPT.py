@@ -4200,9 +4200,21 @@ def ungeocoded_locations():
                     PROGRESS = 1  # Rozpoczęto
                     CURRENT_ROW = 0
                     
-                    # Na Vercel threading nie działa stabilnie - użyj synchronicznego przetwarzania
-                    print("🔄 Vercel: używam synchronicznego przetwarzania...")
-                    locations_data = get_all_locations_status(df)
+                    # Na Vercel - ograniczone przetwarzanie z timeout protection
+                    print(f"🔄 Vercel: przetwarzam maksymalnie 100 lokalizacji (z {total_locations})...")
+                    
+                    if total_locations > 100:
+                        # Ogranicz do 100 lokalizacji aby uniknąć timeout
+                        print(f"⚠️ Za dużo lokalizacji ({total_locations}). Ograniczam do 100 pierwszych.")
+                        # Weź tylko pierwsze 100 wierszy
+                        df_limited = df.head(100)
+                        locations_data = get_all_locations_status(df_limited)
+                        
+                        # Dodaj informację o ograniczeniu
+                        locations_data['warning'] = f"Przetworzono tylko 100 pierwszych lokalizacji z {total_locations}. Podziel plik na mniejsze części."
+                    else:
+                        locations_data = get_all_locations_status(df)
+                    
                     PROCESSING_COMPLETE = True
                     PROGRESS = 100
                     
