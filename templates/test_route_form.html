@@ -62,6 +62,11 @@
                         <label for="load_postal" class="form-label">Kod pocztowy załadunku:</label>
                         <input type="text" id="load_postal" name="load_postal" class="form-control" required placeholder="np. 00-001">
                     </div>
+                    
+                    <div class="form-group">
+                        <label for="load_city" class="form-label">Miasto załadunku (opcjonalne):</label>
+                        <input type="text" id="load_city" name="load_city" class="form-control" placeholder="np. Warszawa">
+                    </div>
                 </div>
                 
                 <div style="flex: 1;">
@@ -75,6 +80,36 @@
                     <div class="form-group">
                         <label for="unload_postal" class="form-label">Kod pocztowy rozładunku:</label>
                         <input type="text" id="unload_postal" name="unload_postal" class="form-control" required placeholder="np. 00-001">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="unload_city" class="form-label">Miasto rozładunku (opcjonalne):</label>
+                        <input type="text" id="unload_city" name="unload_city" class="form-control" placeholder="np. Berlin">
+                    </div>
+                </div>
+            </div>
+            
+            <!-- ========== NOWA SEKCJA: PUNKTY POŚREDNIE ========== -->
+            <div class="card mt-4 mb-4" style="border: 2px dashed #007bff;">
+                <div class="card-header" style="background-color: #e7f3ff;">
+                    <h5 class="mb-0">
+                        <i class="fas fa-map-marked-alt"></i> Punkty pośrednie (opcjonalnie)
+                    </h5>
+                    <small class="text-muted">Dodaj do 5 punktów, przez które ma przejść trasa</small>
+                </div>
+                <div class="card-body">
+                    <div id="waypoints-container">
+                        <!-- Punkty pośrednie będą dodawane dynamicznie przez JavaScript -->
+                    </div>
+                    
+                    <button type="button" id="add-waypoint-btn" class="btn btn-sm btn-outline-primary">
+                        <i class="fas fa-plus-circle"></i> Dodaj punkt pośredni
+                    </button>
+                    
+                    <div class="alert alert-info mt-3" id="waypoints-help">
+                        <i class="fas fa-info-circle"></i>
+                        Kliknij "Dodaj punkt pośredni", aby dodać przystanki na trasie.
+                        Kolejność punktów ma znaczenie!
                     </div>
                 </div>
             </div>
@@ -156,6 +191,19 @@
         padding-left: 15px;
     }
     
+    .waypoint-group {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 15px;
+    }
+    
+    .waypoint-group h6 {
+        color: #007bff;
+        margin: 0;
+    }
+    
     @media (max-width: 768px) {
         .col-md-4, .col-md-6 {
             flex: 0 0 100%;
@@ -164,4 +212,90 @@
         }
     }
 </style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    let waypointCount = 0;
+    const maxWaypoints = 5;
+    
+    const addBtn = document.getElementById('add-waypoint-btn');
+    const container = document.getElementById('waypoints-container');
+    
+    addBtn.addEventListener('click', function() {
+        if (waypointCount >= maxWaypoints) {
+            alert('Maksymalnie 5 punktów pośrednich');
+            return;
+        }
+        
+        waypointCount++;
+        
+        const waypointDiv = document.createElement('div');
+        waypointDiv.className = 'waypoint-group';
+        waypointDiv.id = `waypoint-${waypointCount}`;
+        waypointDiv.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h6>Punkt pośredni #${waypointCount}</h6>
+                <button type="button" class="btn btn-sm btn-danger" onclick="removeWaypoint(${waypointCount})">
+                    <i class="fas fa-times"></i> Usuń
+                </button>
+            </div>
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Kraj:</label>
+                        <input type="text" name="waypoint_${waypointCount}_country" 
+                               class="form-control" placeholder="np. CZ">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Kod pocztowy:</label>
+                        <input type="text" name="waypoint_${waypointCount}_postal" 
+                               class="form-control" placeholder="np. 11000">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label>Miasto (opcjonalnie):</label>
+                        <input type="text" name="waypoint_${waypointCount}_city" 
+                               class="form-control" placeholder="np. Praha">
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        container.appendChild(waypointDiv);
+        
+        // Aktualizuj przycisk
+        if (waypointCount >= maxWaypoints) {
+            addBtn.disabled = true;
+            addBtn.innerHTML = '<i class="fas fa-check-circle"></i> Maksimum punktów osiągnięte';
+        }
+    });
+    
+    // Funkcja globalna do usuwania punktów
+    window.removeWaypoint = function(id) {
+        const element = document.getElementById(`waypoint-${id}`);
+        if (element) {
+            element.remove();
+            waypointCount--;
+            
+            // Aktualizuj numerację pozostałych punktów
+            const remaining = container.querySelectorAll('.waypoint-group');
+            remaining.forEach((wp, index) => {
+                const h6 = wp.querySelector('h6');
+                if (h6) {
+                    h6.textContent = `Punkt pośredni #${index + 1}`;
+                }
+            });
+            
+            // Odblokuj przycisk
+            if (waypointCount < maxWaypoints) {
+                addBtn.disabled = false;
+                addBtn.innerHTML = '<i class="fas fa-plus-circle"></i> Dodaj punkt pośredni';
+            }
+        }
+    };
+});
+</script>
 {% endblock %}
