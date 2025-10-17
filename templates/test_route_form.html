@@ -1,217 +1,657 @@
 {% extends "base.html" %}
 
-{% block title %}Test pojedynczej trasy{% endblock %}
-
-{% block content %}
-<div class="card">
-    <div class="card-header">
-        <div>
-            <i class="fas fa-route"></i> Wycena pojedynczej trasy
-        </div>
-    </div>
-    <div class="card-body">
-        <div class="alert alert-info">
-            <i class="fas fa-info-circle"></i> Wprowadź dane dla jednej trasy, aby przetestować wyliczenie dystansu i kosztów.
-        </div>
-
-        <form method="post" action="/test_route_form">
-            <div class="form-group mb-4">
-                <label for="matrix_type" class="form-label">Matrix marży na dzień:</label>
-                <select name="matrix_type" id="matrix_type" class="form-control" required>
-                    <option value="klient" selected>Matrix Klient</option>
-                    <option value="targi">Matrix Targi</option>
-                </select>
-                <small class="form-text text-muted">Wybierz typ matrixa do obliczeń oczekiwanego zysku</small>
-            </div>
-
-            <div class="form-group mb-4">
-                <label for="transit_time" class="form-label">Transit time (dni) - opcjonalne:</label>
-                <input type="number" id="transit_time" name="transit_time" class="form-control" min="0.25" max="30" step="0.25" placeholder="np. 2.5">
-                <small class="form-text text-muted">Jeśli nie podasz, zostanie obliczone automatycznie na podstawie dystansu</small>
-            </div>
-
-            <div class="row mb-4">
-                <div class="col-md-6">
-                    <div class="form-group">
-                        <label for="fuel_cost" class="form-label">Koszt paliwa (€/km):</label>
-                        <input type="number" id="fuel_cost" name="fuel_cost" class="form-control" 
-                               min="0" max="5" step="0.01" value="0.40" required>
-                        <small class="form-text text-muted">Domyślnie: 0.40 €/km (27l/100km × 1.50€/l)</small>
-                    </div>
-                </div>
-                <div class="col-md-6">
-                    <div class="form-group">
-                        <label for="driver_cost" class="form-label">Koszt kierowcy + leasing (€/dzień):</label>
-                        <input type="number" id="driver_cost" name="driver_cost" class="form-control" 
-                               min="0" max="1000" step="1" value="210" required>
-                        <small class="form-text text-muted">Domyślnie: 210 €/dzień</small>
-                    </div>
-                </div>
-            </div>
-
-            <div class="d-flex">
-                <div style="flex: 1; margin-right: 15px;">
-                    <h5 class="mb-3">Punkt załadunku</h5>
-                    
-                    <div class="form-group">
-                        <label for="load_country" class="form-label">Kraj załadunku:</label>
-                        <input type="text" id="load_country" name="load_country" class="form-control" required placeholder="np. PL, DE, FR">
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="load_postal" class="form-label">Kod pocztowy załadunku:</label>
-                        <input type="text" id="load_postal" name="load_postal" class="form-control" required placeholder="np. 00-001">
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="load_city" class="form-label">Miasto załadunku (opcjonalne):</label>
-                        <input type="text" id="load_city" name="load_city" class="form-control" placeholder="np. Warszawa">
-                    </div>
-                </div>
-                
-                <div style="flex: 1;">
-                    <h5 class="mb-3">Punkt rozładunku</h5>
-                    
-                    <div class="form-group">
-                        <label for="unload_country" class="form-label">Kraj rozładunku:</label>
-                        <input type="text" id="unload_country" name="unload_country" class="form-control" required placeholder="np. PL, DE, FR">
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="unload_postal" class="form-label">Kod pocztowy rozładunku:</label>
-                        <input type="text" id="unload_postal" name="unload_postal" class="form-control" required placeholder="np. 00-001">
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="unload_city" class="form-label">Miasto rozładunku (opcjonalne):</label>
-                        <input type="text" id="unload_city" name="unload_city" class="form-control" placeholder="np. Berlin">
-                    </div>
-                </div>
-            </div>
-            
-            <!-- ========== NOWA SEKCJA: PUNKTY POŚREDNIE ========== -->
-            <div class="card mt-4 mb-4" style="border: 2px dashed #007bff;">
-                <div class="card-header" style="background-color: #e7f3ff;">
-                    <h5 class="mb-0">
-                        <i class="fas fa-map-marked-alt"></i> Punkty pośrednie (opcjonalnie)
-                    </h5>
-                    <small class="text-muted">Dodaj do 5 punktów, przez które ma przejść trasa</small>
-                </div>
-                <div class="card-body">
-                    <div id="waypoints-container">
-                        <!-- Punkty pośrednie będą dodawane dynamicznie przez JavaScript -->
-                    </div>
-                    
-                    <button type="button" id="add-waypoint-btn" class="btn btn-sm btn-outline-primary">
-                        <i class="fas fa-plus-circle"></i> Dodaj punkt pośredni
-                    </button>
-                    
-                    <div class="alert alert-info mt-3" id="waypoints-help">
-                        <i class="fas fa-info-circle"></i>
-                        Kliknij "Dodaj punkt pośredni", aby dodać przystanki na trasie.
-                        Kolejność punktów ma znaczenie!
-                    </div>
-                </div>
-            </div>
-            
-            <button type="submit" class="btn btn-primary mt-3">
-                <i class="fas fa-calculator"></i> Oblicz trasę
-            </button>
-        </form>
-    </div>
-</div>
-
-<div class="card mt-3">
-    <div class="card-header">
-        <i class="fas fa-info-circle"></i> Dostępne kody krajów
-    </div>
-    <div class="card-body">
-        <div class="row">
-            <div class="col-md-4">
-                <ul class="list-unstyled">
-                    <li><strong>PL</strong> - Polska</li>
-                    <li><strong>DE</strong> - Niemcy</li>
-                    <li><strong>FR</strong> - Francja</li>
-                    <li><strong>IT</strong> - Włochy</li>
-                    <li><strong>ES</strong> - Hiszpania</li>
-                </ul>
-            </div>
-            <div class="col-md-4">
-                <ul class="list-unstyled">
-                    <li><strong>NL</strong> - Holandia</li>
-                    <li><strong>BE</strong> - Belgia</li>
-                    <li><strong>CZ</strong> - Czechy</li>
-                    <li><strong>AT</strong> - Austria</li>
-                    <li><strong>SK</strong> - Słowacja</li>
-                </ul>
-            </div>
-            <div class="col-md-4">
-                <ul class="list-unstyled">
-                    <li><strong>SI</strong> - Słowenia</li>
-                    <li><strong>HU</strong> - Węgry</li>
-                    <li><strong>CH</strong> - Szwajcaria</li>
-                    <li><strong>GB</strong> - Wielka Brytania</li>
-                    <li><strong>DK</strong> - Dania</li>
-                </ul>
-            </div>
-        </div>
-    </div>
-</div>
-{% endblock %}
+{% block title %}Wycena Trasy{% endblock %}
 
 {% block head %}
 <style>
-    .list-unstyled {
-        list-style: none;
-        padding-left: 0;
+    :root {
+        --primary: #2563eb;
+        --primary-dark: #1e40af;
+        --success: #10b981;
+        --warning: #f59e0b;
+        --danger: #ef4444;
+        --gray-50: #f9fafb;
+        --gray-100: #f3f4f6;
+        --gray-200: #e5e7eb;
+        --gray-600: #4b5563;
+        --gray-900: #111827;
+        --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+        --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+        --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
     }
     
-    .list-unstyled li {
-        margin-bottom: 8px;
+    body {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        padding: 2rem 0;
     }
     
-    .row {
-        display: flex;
-        flex-wrap: wrap;
-        margin-right: -15px;
-        margin-left: -15px;
+    .route-calculator {
+        max-width: 1200px;
+        margin: 0 auto;
     }
     
-    .col-md-4 {
-        flex: 0 0 33.333333%;
-        max-width: 33.333333%;
-        padding-right: 15px;
-        padding-left: 15px;
+    .main-card {
+        background: white;
+        border-radius: 16px;
+        box-shadow: var(--shadow-lg);
+        overflow: hidden;
     }
     
-    .col-md-6 {
-        flex: 0 0 50%;
-        max-width: 50%;
-        padding-right: 15px;
-        padding-left: 15px;
+    .card-header-custom {
+        background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+        color: white;
+        padding: 2rem;
+        text-align: center;
     }
     
-    .waypoint-group {
-        background-color: #f8f9fa;
-        border: 1px solid #dee2e6;
-        border-radius: 8px;
-        padding: 15px;
-        margin-bottom: 15px;
-    }
-    
-    .waypoint-group h6 {
-        color: #007bff;
+    .card-header-custom h1 {
         margin: 0;
+        font-size: 2rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
     }
     
-    @media (max-width: 768px) {
-        .col-md-4, .col-md-6 {
-            flex: 0 0 100%;
-            max-width: 100%;
-            margin-bottom: 15px;
+    .card-header-custom p {
+        margin: 0.5rem 0 0 0;
+        opacity: 0.9;
+        font-size: 0.95rem;
+    }
+    
+    .form-container {
+        padding: 2rem;
+    }
+    
+    /* Step Indicator */
+    .steps {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 2rem;
+        position: relative;
+    }
+    
+    .steps::before {
+        content: '';
+        position: absolute;
+        top: 20px;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background: var(--gray-200);
+        z-index: 0;
+    }
+    
+    .step {
+        position: relative;
+        text-align: center;
+        flex: 1;
+        z-index: 1;
+    }
+    
+    .step-circle {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: white;
+        border: 3px solid var(--gray-200);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        color: var(--gray-600);
+        margin-bottom: 0.5rem;
+    }
+    
+    .step.active .step-circle {
+        border-color: var(--primary);
+        background: var(--primary);
+        color: white;
+    }
+    
+    .step-label {
+        font-size: 0.875rem;
+        color: var(--gray-600);
+        font-weight: 500;
+    }
+    
+    /* Section Cards */
+    .section-card {
+        background: var(--gray-50);
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+        border: 1px solid var(--gray-200);
+    }
+    
+    .section-title {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: var(--gray-900);
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    .section-title i {
+        color: var(--primary);
+    }
+    
+    /* Form Groups */
+    .form-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+    
+    .form-group {
+        margin-bottom: 0;
+    }
+    
+    .form-label {
+        font-weight: 600;
+        color: var(--gray-900);
+        margin-bottom: 0.5rem;
+        font-size: 0.875rem;
+        display: block;
+    }
+    
+    .form-control {
+        width: 100%;
+        padding: 0.75rem;
+        border: 2px solid var(--gray-200);
+        border-radius: 8px;
+        font-size: 0.95rem;
+        transition: all 0.2s;
+    }
+    
+    .form-control:focus {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+    
+    .form-text {
+        font-size: 0.8rem;
+        color: var(--gray-600);
+        margin-top: 0.25rem;
+        display: block;
+    }
+    
+    /* Location Cards */
+    .location-cards {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        gap: 1.5rem;
+        align-items: center;
+        margin-bottom: 1.5rem;
+    }
+    
+    .location-card {
+        background: white;
+        border-radius: 12px;
+        padding: 1.5rem;
+        box-shadow: var(--shadow);
+        border: 2px solid var(--gray-100);
+    }
+    
+    .location-card.start {
+        border-left: 4px solid var(--success);
+    }
+    
+    .location-card.end {
+        border-left: 4px solid var(--danger);
+    }
+    
+    .location-header {
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--gray-900);
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    .arrow-icon {
+        font-size: 2rem;
+        color: var(--primary);
+    }
+    
+    /* Waypoints Section */
+    .waypoints-section {
+        background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+        border: 2px dashed var(--primary);
+    }
+    
+    .waypoints-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+    
+    .waypoint-item {
+        background: white;
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        box-shadow: var(--shadow-sm);
+        position: relative;
+        animation: slideIn 0.3s ease-out;
+    }
+    
+    @keyframes slideIn {
+        from {
+            opacity: 0;
+            transform: translateY(-10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
         }
     }
+    
+    .waypoint-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 2px solid var(--gray-100);
+    }
+    
+    .waypoint-number {
+        background: var(--primary);
+        color: white;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 0.9rem;
+    }
+    
+    /* Tabs for Waypoint Input Method */
+    .input-method-tabs {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+        background: var(--gray-100);
+        padding: 0.25rem;
+        border-radius: 8px;
+    }
+    
+    .tab-btn {
+        flex: 1;
+        padding: 0.5rem 1rem;
+        border: none;
+        background: transparent;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 0.875rem;
+        color: var(--gray-600);
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    
+    .tab-btn.active {
+        background: white;
+        color: var(--primary);
+        box-shadow: var(--shadow-sm);
+    }
+    
+    .tab-content {
+        display: none;
+    }
+    
+    .tab-content.active {
+        display: block;
+    }
+    
+    /* Buttons */
+    .btn {
+        padding: 0.75rem 1.5rem;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.95rem;
+        border: none;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    .btn-primary {
+        background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+        color: white;
+        box-shadow: var(--shadow);
+    }
+    
+    .btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-md);
+    }
+    
+    .btn-outline {
+        background: white;
+        color: var(--primary);
+        border: 2px solid var(--primary);
+    }
+    
+    .btn-outline:hover {
+        background: var(--primary);
+        color: white;
+    }
+    
+    .btn-danger {
+        background: var(--danger);
+        color: white;
+    }
+    
+    .btn-sm {
+        padding: 0.5rem 1rem;
+        font-size: 0.875rem;
+    }
+    
+    .btn-block {
+        width: 100%;
+        justify-content: center;
+        padding: 1rem;
+        font-size: 1.1rem;
+    }
+    
+    /* Alert */
+    .alert {
+        padding: 1rem;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: start;
+        gap: 0.75rem;
+    }
+    
+    .alert i {
+        font-size: 1.25rem;
+        margin-top: 0.1rem;
+    }
+    
+    .alert-info {
+        background: #dbeafe;
+        color: #1e40af;
+        border: 1px solid #93c5fd;
+    }
+    
+    .alert-warning {
+        background: #fef3c7;
+        color: #92400e;
+        border: 1px solid #fcd34d;
+    }
+    
+    /* Countries List */
+    .countries-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 0.5rem;
+        margin-top: 1rem;
+    }
+    
+    .country-item {
+        padding: 0.5rem;
+        background: var(--gray-50);
+        border-radius: 6px;
+        font-size: 0.875rem;
+    }
+    
+    .country-code {
+        font-weight: 700;
+        color: var(--primary);
+    }
+    
+    /* Responsive */
+    @media (max-width: 768px) {
+        .location-cards {
+            grid-template-columns: 1fr;
+        }
+        
+        .arrow-icon {
+            transform: rotate(90deg);
+        }
+        
+        .form-row {
+            grid-template-columns: 1fr;
+        }
+        
+        .steps {
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .steps::before {
+            display: none;
+        }
+    }
+    
+    /* Utilities */
+    .text-center { text-align: center; }
+    .mb-2 { margin-bottom: 0.5rem; }
+    .mb-3 { margin-bottom: 1rem; }
+    .mb-4 { margin-bottom: 1.5rem; }
+    .mt-2 { margin-top: 0.5rem; }
+    .mt-3 { margin-top: 1rem; }
+    .mt-4 { margin-top: 1.5rem; }
 </style>
+{% endblock %}
+
+{% block content %}
+<div class="route-calculator">
+    <div class="main-card">
+        <div class="card-header-custom">
+            <h1>
+                <i class="fas fa-route"></i>
+                Kalkulator Wyceny Trasy
+            </h1>
+            <p>Oblicz dokładne koszty transportu z uwzględnieniem punktów pośrednich</p>
+        </div>
+        
+        <div class="form-container">
+            <!-- Progress Steps -->
+            <div class="steps">
+                <div class="step active">
+                    <div class="step-circle">1</div>
+                    <div class="step-label">Konfiguracja</div>
+                </div>
+                <div class="step active">
+                    <div class="step-circle">2</div>
+                    <div class="step-label">Trasa</div>
+                </div>
+                <div class="step">
+                    <div class="step-circle">3</div>
+                    <div class="step-label">Waypoints</div>
+                </div>
+                <div class="step">
+                    <div class="step-circle">4</div>
+                    <div class="step-label">Wyniki</div>
+                </div>
+            </div>
+            
+            <form method="post" action="/test_route_form">
+                <!-- Configuration Section -->
+                <div class="section-card">
+                    <div class="section-title">
+                        <i class="fas fa-cog"></i>
+                        Konfiguracja obliczeń
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="matrix_type" class="form-label">Typ matrixa marży</label>
+                            <select name="matrix_type" id="matrix_type" class="form-control" required>
+                                <option value="klient" selected>Matrix Klient</option>
+                                <option value="targi">Matrix Targi</option>
+                            </select>
+                            <small class="form-text">Do obliczeń oczekiwanego zysku</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="transit_time" class="form-label">Transit time (dni)</label>
+                            <input type="number" id="transit_time" name="transit_time" class="form-control" 
+                                   min="0.25" max="30" step="0.25" placeholder="Auto">
+                            <small class="form-text">Opcjonalne, obliczone automatycznie</small>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="fuel_cost" class="form-label">Koszt paliwa (€/km)</label>
+                            <input type="number" id="fuel_cost" name="fuel_cost" class="form-control" 
+                                   min="0" max="5" step="0.01" value="0.40" required>
+                            <small class="form-text">27l/100km × 1.50€/l = 0.40€/km</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="driver_cost" class="form-label">Koszt kierowcy + leasing (€/dzień)</label>
+                            <input type="number" id="driver_cost" name="driver_cost" class="form-control" 
+                                   min="0" max="1000" step="1" value="210" required>
+                            <small class="form-text">Dzienny koszt operacyjny</small>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Route Section -->
+                <div class="section-card">
+                    <div class="section-title">
+                        <i class="fas fa-map-signs"></i>
+                        Definicja trasy
+                    </div>
+                    
+                    <div class="location-cards">
+                        <div class="location-card start">
+                            <div class="location-header">
+                                <i class="fas fa-circle" style="color: var(--success);"></i>
+                                Punkt załadunku
+                            </div>
+                            
+                            <div class="form-group mb-3">
+                                <label for="load_country" class="form-label">Kraj</label>
+                                <input type="text" id="load_country" name="load_country" class="form-control" 
+                                       required placeholder="np. PL, DE, FR">
+                            </div>
+                            
+                            <div class="form-group mb-3">
+                                <label for="load_postal" class="form-label">Kod pocztowy</label>
+                                <input type="text" id="load_postal" name="load_postal" class="form-control" 
+                                       required placeholder="np. 00-001">
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="load_city" class="form-label">Miasto (opcjonalnie)</label>
+                                <input type="text" id="load_city" name="load_city" class="form-control" 
+                                       placeholder="np. Warszawa">
+                            </div>
+                        </div>
+                        
+                        <div class="arrow-icon">
+                            <i class="fas fa-arrow-right"></i>
+                        </div>
+                        
+                        <div class="location-card end">
+                            <div class="location-header">
+                                <i class="fas fa-circle" style="color: var(--danger);"></i>
+                                Punkt rozładunku
+                            </div>
+                            
+                            <div class="form-group mb-3">
+                                <label for="unload_country" class="form-label">Kraj</label>
+                                <input type="text" id="unload_country" name="unload_country" class="form-control" 
+                                       required placeholder="np. PL, DE, FR">
+                            </div>
+                            
+                            <div class="form-group mb-3">
+                                <label for="unload_postal" class="form-label">Kod pocztowy</label>
+                                <input type="text" id="unload_postal" name="unload_postal" class="form-control" 
+                                       required placeholder="np. 00-001">
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="unload_city" class="form-label">Miasto (opcjonalnie)</label>
+                                <input type="text" id="unload_city" name="unload_city" class="form-control" 
+                                       placeholder="np. Berlin">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Waypoints Section -->
+                <div class="waypoints-section">
+                    <div class="waypoints-header">
+                        <div class="section-title" style="margin: 0;">
+                            <i class="fas fa-map-marked-alt"></i>
+                            Punkty pośrednie (opcjonalnie)
+                        </div>
+                        <button type="button" id="add-waypoint-btn" class="btn btn-outline btn-sm">
+                            <i class="fas fa-plus-circle"></i> Dodaj punkt
+                        </button>
+                    </div>
+                    
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle"></i>
+                        <div>
+                            Dodaj do 5 punktów pośrednich przez które ma przejść trasa.
+                            Możesz podać koordynaty lub adres (kraj + kod pocztowy).
+                        </div>
+                    </div>
+                    
+                    <div id="waypoints-container"></div>
+                </div>
+                
+                <!-- Submit Button -->
+                <button type="submit" class="btn btn-primary btn-block">
+                    <i class="fas fa-calculator"></i>
+                    Oblicz trasę i koszty
+                </button>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Countries Reference -->
+    <div class="main-card mt-4">
+        <div class="form-container">
+            <div class="section-title">
+                <i class="fas fa-globe-europe"></i>
+                Dostępne kody krajów
+            </div>
+            <div class="countries-grid">
+                <div class="country-item"><span class="country-code">PL</span> - Polska</div>
+                <div class="country-item"><span class="country-code">DE</span> - Niemcy</div>
+                <div class="country-item"><span class="country-code">FR</span> - Francja</div>
+                <div class="country-item"><span class="country-code">IT</span> - Włochy</div>
+                <div class="country-item"><span class="country-code">ES</span> - Hiszpania</div>
+                <div class="country-item"><span class="country-code">NL</span> - Holandia</div>
+                <div class="country-item"><span class="country-code">BE</span> - Belgia</div>
+                <div class="country-item"><span class="country-code">CZ</span> - Czechy</div>
+                <div class="country-item"><span class="country-code">AT</span> - Austria</div>
+                <div class="country-item"><span class="country-code">SK</span> - Słowacja</div>
+                <div class="country-item"><span class="country-code">SI</span> - Słowenia</div>
+                <div class="country-item"><span class="country-code">HU</span> - Węgry</div>
+                <div class="country-item"><span class="country-code">CH</span> - Szwajcaria</div>
+                <div class="country-item"><span class="country-code">GB</span> - W. Brytania</div>
+                <div class="country-item"><span class="country-code">DK</span> - Dania</div>
+            </div>
+        </div>
+    </div>
+</div>
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
@@ -230,57 +670,57 @@ document.addEventListener('DOMContentLoaded', function() {
         waypointCount++;
         
         const waypointDiv = document.createElement('div');
-        waypointDiv.className = 'waypoint-group';
+        waypointDiv.className = 'waypoint-item';
         waypointDiv.id = `waypoint-${waypointCount}`;
         waypointDiv.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h6>Punkt pośredni #${waypointCount}</h6>
-                <button type="button" class="btn btn-sm btn-danger" onclick="removeWaypoint(${waypointCount})">
-                    <i class="fas fa-times"></i> Usuń
+            <div class="waypoint-header">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <span class="waypoint-number">${waypointCount}</span>
+                    <span style="font-weight: 600; color: var(--gray-900);">Punkt pośredni #${waypointCount}</span>
+                </div>
+                <button type="button" class="btn btn-danger btn-sm" onclick="removeWaypoint(${waypointCount})">
+                    <i class="fas fa-times"></i>
                 </button>
             </div>
             
-            <div class="alert alert-warning" style="font-size: 0.9em; padding: 8px 12px;">
-                <i class="fas fa-info-circle"></i> 
-                <strong>Wybierz jeden sposób:</strong> Albo koordynaty, albo kraj + kod pocztowy
+            <div class="input-method-tabs">
+                <button type="button" class="tab-btn active" onclick="switchTab(${waypointCount}, 'coords')">
+                    <i class="fas fa-map-pin"></i> Koordynaty
+                </button>
+                <button type="button" class="tab-btn" onclick="switchTab(${waypointCount}, 'address')">
+                    <i class="fas fa-map-marker-alt"></i> Adres
+                </button>
             </div>
             
-            <div class="form-group mb-3">
-                <label><i class="fas fa-map-pin"></i> Koordynaty (szerokość, długość):</label>
-                <input type="text" name="waypoint_${waypointCount}_coords" 
-                       class="form-control" placeholder="np. 50.0755,14.4378"
-                       onchange="toggleWaypointFields(${waypointCount}, 'coords')">
-                <small class="text-muted">Format: szerokość,długość (np. 50.0755,14.4378)</small>
+            <div id="coords-tab-${waypointCount}" class="tab-content active">
+                <div class="form-group">
+                    <label class="form-label">Współrzędne geograficzne</label>
+                    <input type="text" name="waypoint_${waypointCount}_coords" 
+                           class="form-control" placeholder="50.0755,14.4378"
+                           id="coords-input-${waypointCount}">
+                    <small class="form-text">Format: szerokość,długość (np. 50.0755,14.4378)</small>
+                </div>
             </div>
             
-            <div style="text-align: center; margin: 15px 0; color: #6c757d; font-weight: bold;">
-                — LUB —
-            </div>
-            
-            <div id="waypoint-${waypointCount}-address-fields">
-                <div class="row">
-                    <div class="col-md-4">
-                        <div class="form-group">
-                            <label>Kraj:</label>
-                            <input type="text" name="waypoint_${waypointCount}_country" 
-                                   class="form-control" placeholder="np. CZ"
-                                   onchange="toggleWaypointFields(${waypointCount}, 'address')">
-                        </div>
+            <div id="address-tab-${waypointCount}" class="tab-content">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Kraj</label>
+                        <input type="text" name="waypoint_${waypointCount}_country" 
+                               class="form-control" placeholder="CZ"
+                               id="country-input-${waypointCount}">
                     </div>
-                    <div class="col-md-4">
-                        <div class="form-group">
-                            <label>Kod pocztowy:</label>
-                            <input type="text" name="waypoint_${waypointCount}_postal" 
-                                   class="form-control" placeholder="np. 11000"
-                                   onchange="toggleWaypointFields(${waypointCount}, 'address')">
-                        </div>
+                    <div class="form-group">
+                        <label class="form-label">Kod pocztowy</label>
+                        <input type="text" name="waypoint_${waypointCount}_postal" 
+                               class="form-control" placeholder="11000"
+                               id="postal-input-${waypointCount}">
                     </div>
-                    <div class="col-md-4">
-                        <div class="form-group">
-                            <label>Miasto (opcjonalnie):</label>
-                            <input type="text" name="waypoint_${waypointCount}_city" 
-                                   class="form-control" placeholder="np. Praha">
-                        </div>
+                    <div class="form-group">
+                        <label class="form-label">Miasto (opcjonalnie)</label>
+                        <input type="text" name="waypoint_${waypointCount}_city" 
+                               class="form-control" placeholder="Praha"
+                               id="city-input-${waypointCount}">
                     </div>
                 </div>
             </div>
@@ -288,71 +728,74 @@ document.addEventListener('DOMContentLoaded', function() {
         
         container.appendChild(waypointDiv);
         
-        // Aktualizuj przycisk
         if (waypointCount >= maxWaypoints) {
             addBtn.disabled = true;
             addBtn.innerHTML = '<i class="fas fa-check-circle"></i> Maksimum punktów osiągnięte';
         }
     });
     
-    // Funkcja globalna do usuwania punktów
     window.removeWaypoint = function(id) {
         const element = document.getElementById(`waypoint-${id}`);
         if (element) {
-            element.remove();
-            waypointCount--;
-            
-            // Aktualizuj numerację pozostałych punktów
-            const remaining = container.querySelectorAll('.waypoint-group');
-            remaining.forEach((wp, index) => {
-                const h6 = wp.querySelector('h6');
-                if (h6) {
-                    h6.textContent = `Punkt pośredni #${index + 1}`;
+            element.style.animation = 'slideOut 0.3s ease-out';
+            setTimeout(() => {
+                element.remove();
+                waypointCount--;
+                
+                // Renumber remaining waypoints
+                const remaining = container.querySelectorAll('.waypoint-item');
+                remaining.forEach((wp, index) => {
+                    const number = wp.querySelector('.waypoint-number');
+                    const header = wp.querySelector('.waypoint-header span:nth-child(2)');
+                    if (number) number.textContent = index + 1;
+                    if (header) header.textContent = `Punkt pośredni #${index + 1}`;
+                });
+                
+                if (waypointCount < maxWaypoints) {
+                    addBtn.disabled = false;
+                    addBtn.innerHTML = '<i class="fas fa-plus-circle"></i> Dodaj punkt';
                 }
-            });
-            
-            // Odblokuj przycisk
-            if (waypointCount < maxWaypoints) {
-                addBtn.disabled = false;
-                addBtn.innerHTML = '<i class="fas fa-plus-circle"></i> Dodaj punkt pośredni';
-            }
+            }, 300);
         }
     };
     
-    // Funkcja do przełączania pól (koordynaty vs adres)
-    window.toggleWaypointFields = function(id, type) {
-        const coordsInput = document.querySelector(`input[name="waypoint_${id}_coords"]`);
-        const countryInput = document.querySelector(`input[name="waypoint_${id}_country"]`);
-        const postalInput = document.querySelector(`input[name="waypoint_${id}_postal"]`);
-        const cityInput = document.querySelector(`input[name="waypoint_${id}_city"]`);
-        const addressFields = document.getElementById(`waypoint-${id}-address-fields`);
+    window.switchTab = function(id, tab) {
+        // Update tab buttons
+        const tabBtns = document.querySelectorAll(`#waypoint-${id} .tab-btn`);
+        tabBtns.forEach(btn => btn.classList.remove('active'));
+        event.target.classList.add('active');
         
-        if (type === 'coords' && coordsInput.value.trim()) {
-            // Jeśli wpisano koordynaty, wyłącz pola adresowe
-            if (countryInput) countryInput.value = '';
-            if (postalInput) postalInput.value = '';
-            if (cityInput) cityInput.value = '';
-            if (addressFields) addressFields.style.opacity = '0.4';
-            if (countryInput) countryInput.disabled = true;
-            if (postalInput) postalInput.disabled = true;
-            if (cityInput) cityInput.disabled = true;
-        } else if (type === 'address' && (countryInput.value.trim() || postalInput.value.trim())) {
-            // Jeśli wpisano kraj lub kod, wyłącz pole koordynatów
-            if (coordsInput) coordsInput.value = '';
-            coordsInput.style.opacity = '0.4';
-            coordsInput.disabled = true;
+        // Update tab content
+        const coordsTab = document.getElementById(`coords-tab-${id}`);
+        const addressTab = document.getElementById(`address-tab-${id}`);
+        
+        if (tab === 'coords') {
+            coordsTab.classList.add('active');
+            addressTab.classList.remove('active');
+            // Clear address inputs
+            document.getElementById(`country-input-${id}`).value = '';
+            document.getElementById(`postal-input-${id}`).value = '';
+            document.getElementById(`city-input-${id}`).value = '';
         } else {
-            // Przywróć wszystkie pola
-            if (coordsInput) {
-                coordsInput.style.opacity = '1';
-                coordsInput.disabled = false;
-            }
-            if (addressFields) addressFields.style.opacity = '1';
-            if (countryInput) countryInput.disabled = false;
-            if (postalInput) postalInput.disabled = false;
-            if (cityInput) cityInput.disabled = false;
+            coordsTab.classList.remove('active');
+            addressTab.classList.add('active');
+            // Clear coords input
+            document.getElementById(`coords-input-${id}`).value = '';
         }
     };
 });
+
+// Animation for slide out
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes slideOut {
+        to {
+            opacity: 0;
+            transform: translateX(20px);
+        }
+    }
+`;
+document.head.appendChild(style);
 </script>
 {% endblock %}
+
