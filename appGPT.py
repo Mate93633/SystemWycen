@@ -3762,8 +3762,22 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                     special_systems = []
                 
                 # Współrzędne dla mapy (start i koniec)
-                coords_zl = route_req.start.coordinates if route_req.start.is_geocoded() else None
-                coords_roz = route_req.end.coordinates if route_req.end.is_geocoded() else None
+                # Musimy zwrócić 4 wartości jak get_coordinates: (lat, lon, quality, source)
+                if route_req.start.is_geocoded():
+                    lat, lon = route_req.start.coordinates
+                    quality = 'coordinates' if not route_req.start.country else 'geocoded'
+                    source = 'direct' if not route_req.start.country else 'PTV API'
+                    coords_zl = (lat, lon, quality, source)
+                else:
+                    coords_zl = None
+                
+                if route_req.end.is_geocoded():
+                    lat, lon = route_req.end.coordinates
+                    quality = 'coordinates' if not route_req.end.country else 'geocoded'
+                    source = 'direct' if not route_req.end.country else 'PTV API'
+                    coords_roz = (lat, lon, quality, source)
+                else:
+                    coords_roz = None
                 
             else:
                 # ========== STARY FLOW: bez waypoints (backward compatibility) ==========
