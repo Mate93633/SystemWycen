@@ -4868,7 +4868,9 @@ def test_route_form():
                 driver_cost_total = driver_days * driver_cost if driver_days else 0
                 
                 # Podlot (tylko dla pierwszego segmentu)
-                podlot_cost = calculate_podlot(load_country, load_postal)
+                # Używamy domyślnej wartości 100 km dla formularza testowego
+                podlot_km = 100
+                podlot_cost = calculate_podlot_toll(podlot_km, fuel_cost_per_km=fuel_cost)
                 
                 total_cost = (
                     fuel_cost_total + 
