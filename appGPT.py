@@ -158,8 +158,16 @@ class WaypointData:
         if len(self.postal_code) < 2:
             raise ValueError(f"Kod pocztowy musi mieć minimum 2 znaki: '{self.postal_code}'")
         
+        # Normalizacja miasta (handle NaN from pandas)
         if self.city:
-            self.city = self.city.strip()
+            # Sprawdź czy to nie jest NaN/None/float
+            if isinstance(self.city, str):
+                self.city = self.city.strip()
+                if not self.city:  # Pusta string po strip
+                    self.city = None
+            else:
+                # NaN, float, lub inny typ - ustaw None
+                self.city = None
     
     def is_geocoded(self) -> bool:
         """Sprawdza czy punkt ma przypisane współrzędne"""
