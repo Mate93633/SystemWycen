@@ -106,23 +106,50 @@ class WaypointData:
     """
     Reprezentacja pojedynczego punktu na trasie.
     
+    Może być utworzony na dwa sposoby:
+    1. Kraj + kod pocztowy (+ opcjonalnie miasto) - wymaga geokodowania
+    2. Bezpośrednio współrzędne - bez geokodowania
+    
     Attributes:
-        country: Kod kraju (ISO 2-letter, np. 'PL')
-        postal_code: Kod pocztowy
+        country: Kod kraju (ISO 2-letter, np. 'PL') lub None dla koordynat
+        postal_code: Kod pocztowy (min 2 cyfry) lub None dla koordynat
         city: Nazwa miasta (opcjonalne)
-        coordinates: Współrzędne (lat, lon) po geokodowaniu
+        coordinates: Współrzędne (lat, lon) - podane bezpośrednio lub po geokodowaniu
     """
-    country: str
-    postal_code: str
+    country: Optional[str] = None
+    postal_code: Optional[str] = None
     city: Optional[str] = None
     coordinates: Optional[Tuple[float, float]] = None
     
     def __post_init__(self):
-        """Normalizacja danych wejściowych"""
-        if self.country:
-            self.country = self.country.upper().strip()
-        if self.postal_code:
-            self.postal_code = self.postal_code.strip()
+        """Walidacja i normalizacja danych wejściowych"""
+        # Scenariusz 1: Koordynaty bezpośrednie
+        if self.coordinates and len(self.coordinates) == 2:
+            # Walidacja koordynat
+            lat, lon = self.coordinates
+            if not (-90 <= lat <= 90):
+                raise ValueError(f"Nieprawidłowa szerokość geograficzna: {lat} (musi być -90 do 90)")
+            if not (-180 <= lon <= 180):
+                raise ValueError(f"Nieprawidłowa długość geograficzna: {lon} (musi być -180 do 180)")
+            # Koordynaty OK, country/postal mogą być None
+            return
+        
+        # Scenariusz 2: Kraj + kod pocztowy (wymaga geokodowania)
+        if not self.country or not self.postal_code:
+            raise ValueError("WaypointData wymaga albo coordinates albo (country + postal_code)")
+        
+        # Normalizacja
+        self.country = self.country.upper().strip()
+        self.postal_code = self.postal_code.strip()
+        
+        # Walidacja kodu kraju (2 litery)
+        if len(self.country) != 2 or not self.country.isalpha():
+            raise ValueError(f"Kod kraju musi mieć 2 litery (ISO 3166-1): '{self.country}'")
+        
+        # Walidacja kodu pocztowego (min 2 znaki)
+        if len(self.postal_code) < 2:
+            raise ValueError(f"Kod pocztowy musi mieć minimum 2 znaki: '{self.postal_code}'")
+        
         if self.city:
             self.city = self.city.strip()
     
@@ -130,10 +157,22 @@ class WaypointData:
         """Sprawdza czy punkt ma przypisane współrzędne"""
         return self.coordinates is not None and len(self.coordinates) == 2
     
+    def needs_geocoding(self) -> bool:
+        """Sprawdza czy punkt wymaga geokodowania"""
+        return not self.is_geocoded() and self.country and self.postal_code
+    
     def __str__(self) -> str:
         """String representation dla logowania"""
-        city_str = f" ({self.city})" if self.city else ""
-        return f"{self.country} {self.postal_code}{city_str}"
+        if self.is_geocoded() and not self.country:
+            # Tylko koordynaty
+            return f"Coords({self.coordinates[0]:.4f}, {self.coordinates[1]:.4f})"
+        elif self.country and self.postal_code:
+            # Kraj + kod
+            city_str = f" ({self.city})" if self.city else ""
+            coords_str = f" [{self.coordinates[0]:.4f}, {self.coordinates[1]:.4f}]" if self.is_geocoded() else ""
+            return f"{self.country} {self.postal_code}{city_str}{coords_str}"
+        else:
+            return "WaypointData(invalid)"
 
 
 @dataclass
@@ -1423,27 +1462,39 @@ def calculate_multi_waypoint_route(route_request: RouteRequest):
     """
     logger.info(f"Rozpoczynam obliczanie trasy z waypoints: {route_request}")
     
-    # KROK 1: Geokodowanie wszystkich punktów
+    # KROK 1: Geokodowanie wszystkich punktów (jeśli potrzebne)
     all_points = route_request.get_all_points_ordered()
     geocoded_coords = []
     failed_points = []
     
     for i, point in enumerate(all_points):
-        coords = get_coordinates(point.country, point.postal_code, point.city)
+        # Sprawdź czy punkt już ma koordynaty
+        if point.is_geocoded():
+            geocoded_coords.append(point.coordinates)
+            logger.debug(f"Punkt {i+1}/{len(all_points)} (koordynaty bezpośrednie): {point}")
+            continue
         
-        if coords and len(coords) >= 2 and None not in coords[:2]:
-            point.coordinates = (coords[0], coords[1])
-            geocoded_coords.append((coords[0], coords[1]))
-            logger.debug(f"Punkt {i+1}/{len(all_points)} OK: {point}")
+        # Wymaga geokodowania
+        if point.needs_geocoding():
+            coords = get_coordinates(point.country, point.postal_code, point.city)
+            
+            if coords and len(coords) >= 2 and None not in coords[:2]:
+                point.coordinates = (coords[0], coords[1])
+                geocoded_coords.append((coords[0], coords[1]))
+                logger.debug(f"Punkt {i+1}/{len(all_points)} (geokodowany): {point}")
+            else:
+                failed_points.append(point)
+                logger.warning(f"Punkt {i+1}/{len(all_points)} FAILED geokodowanie: {point}")
         else:
+            # Punkt nieprawidłowy (brak coords i brak country/postal)
             failed_points.append(point)
-            logger.warning(f"Punkt {i+1}/{len(all_points)} FAILED: {point}")
+            logger.warning(f"Punkt {i+1}/{len(all_points)} INVALID: {point}")
     
     if failed_points:
         failed_str = ", ".join(str(p) for p in failed_points)
         error_msg = (
-            f"Nie można geokodować {len(failed_points)} punkt(ów): {failed_str}. "
-            f"Sprawdź poprawność kodów pocztowych i nazw miast."
+            f"Nie można przetworzyć {len(failed_points)} punkt(ów): {failed_str}. "
+            f"Sprawdź poprawność kodów pocztowych, nazw miast lub koordynat."
         )
         logger.error(error_msg)
         return {
@@ -1452,7 +1503,7 @@ def calculate_multi_waypoint_route(route_request: RouteRequest):
             'failed_points': failed_points
         }
     
-    logger.info(f"Geokodowanie zakończone sukcesem: {len(geocoded_coords)} punktów")
+    logger.info(f"Przygotowanie punktów zakończone: {len(geocoded_coords)} punktów gotowych")
     
     # KROK 2: Wywołanie PTV API z wieloma waypoints
     ptv_result = ptv_manager.get_route_with_waypoints(
@@ -1541,9 +1592,11 @@ def parse_waypoints_from_excel_row(row, column_name='Punkty_posrednie'):
     Parsuje punkty pośrednie z wiersza Excel (format Compact).
     
     Format obsługiwany:
-    - "CZ:11000;AT:1010" - bez miast
-    - "CZ:11000:Praha;AT:1010:Wien" - z miastami
-    - "" lub NaN - brak punktów
+    1. Kraj + kod: "CZ:11000;AT:1010"
+    2. Z miastami: "CZ:11000:Praha;AT:1010:Wien"
+    3. Koordynaty: "50.0755,14.4378;48.2082,16.3738"
+    4. Mix: "CZ:11000;50.0755,14.4378;AT:1010:Wien"
+    5. Pusty: "" lub NaN - brak punktów
     
     Args:
         row: pandas Series (wiersz DataFrame)
@@ -1557,6 +1610,11 @@ def parse_waypoints_from_excel_row(row, column_name='Punkty_posrednie'):
         >>> waypoints = parse_waypoints_from_excel_row(row)
         >>> len(waypoints)
         2
+        
+        >>> row = pd.Series({'Punkty_posrednie': '50.0755,14.4378'})
+        >>> waypoints = parse_waypoints_from_excel_row(row)
+        >>> waypoints[0].coordinates
+        (50.0755, 14.4378)
     """
     waypoints = []
     
@@ -1582,26 +1640,42 @@ def parse_waypoints_from_excel_row(row, column_name='Punkty_posrednie'):
         if not part:
             continue
         
-        # Split po dwukropku: KRAJ:KOD[:MIASTO]
-        tokens = part.split(':')
-        
-        if len(tokens) < 2:
-            logger.warning(f"Nieprawidłowy format waypoint: '{part}' - oczekiwano KRAJ:KOD[:MIASTO]")
+        try:
+            # Sprawdź czy to koordynaty (format: LAT,LON)
+            if ',' in part and ':' not in part:
+                # Format koordynat: "50.0755,14.4378"
+                coords = part.split(',')
+                if len(coords) == 2:
+                    lat = float(coords[0].strip())
+                    lon = float(coords[1].strip())
+                    waypoints.append(WaypointData(coordinates=(lat, lon)))
+                    logger.debug(f"Sparsowano waypoint (koordynaty): ({lat:.4f}, {lon:.4f})")
+                    continue
+            
+            # Format kraju: KRAJ:KOD[:MIASTO]
+            tokens = part.split(':')
+            
+            if len(tokens) < 2:
+                logger.warning(f"Nieprawidłowy format waypoint: '{part}' - oczekiwano KRAJ:KOD[:MIASTO] lub LAT,LON")
+                continue
+            
+            country = tokens[0].strip().upper()
+            postal_code = tokens[1].strip()
+            city = tokens[2].strip() if len(tokens) > 2 else None
+            
+            if country and postal_code:
+                waypoints.append(WaypointData(
+                    country=country,
+                    postal_code=postal_code,
+                    city=city
+                ))
+                logger.debug(f"Sparsowano waypoint (kraj+kod): {country} {postal_code}" + (f" ({city})" if city else ""))
+            else:
+                logger.warning(f"Pominięto waypoint z pustym krajem lub kodem: '{part}'")
+                
+        except ValueError as e:
+            logger.warning(f"Błąd parsowania waypoint '{part}': {str(e)}")
             continue
-        
-        country = tokens[0].strip().upper()
-        postal_code = tokens[1].strip()
-        city = tokens[2].strip() if len(tokens) > 2 else None
-        
-        if country and postal_code:
-            waypoints.append(WaypointData(
-                country=country,
-                postal_code=postal_code,
-                city=city
-            ))
-            logger.debug(f"Sparsowano waypoint: {country} {postal_code}" + (f" ({city})" if city else ""))
-        else:
-            logger.warning(f"Pominięto waypoint z pustym krajem lub kodem: '{part}'")
     
     return waypoints
 
