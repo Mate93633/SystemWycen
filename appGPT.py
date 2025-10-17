@@ -4885,12 +4885,13 @@ def test_route_form():
                     podlot_cost
                 )
                 
-                # Renderuj specjalny template dla waypoints
+                # Renderuj dedykowany template dla wyników waypoints
                 return render_template(
-                    "test_route_form.html",  # użyjemy tego samego template z danymi
-                    waypoints_result=True,
+                    "test_route_waypoints_result.html",
                     route_request=route_req,
                     route_result=result,
+                    fuel_cost=fuel_cost,
+                    driver_cost=driver_cost,
                     fuel_cost_total=fuel_cost_total,
                     driver_cost_total=driver_cost_total,
                     driver_days=driver_days,
@@ -4898,7 +4899,8 @@ def test_route_form():
                     podlot_source=podlot_source,
                     podlot_cost=podlot_cost,
                     total_cost=total_cost,
-                    matrix_name=matrix_type.title()
+                    matrix_name=matrix_type.title(),
+                    transit_time=transit_time
                 )
                 
             except ValueError as e:

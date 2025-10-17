@@ -121,62 +121,6 @@
     </div>
 </div>
 
-{% if waypoints_result and route_result %}
-<div class="card mt-4">
-    <div class="card-header" style="background-color: #28a745; color: white;">
-        <i class="fas fa-check-circle"></i> Wyniki oblicze\u0144 trasy z punktami po\u015brednimi
-    </div>
-    <div class="card-body">
-        <div class="alert alert-success">
-            <h5><i class="fas fa-route"></i> Trasa: {{ route_request }}</h5>
-        </div>
-
-        <div class="row">
-            <div class="col-md-6">
-                <h6><i class="fas fa-road"></i> Dystans i czas:</h6>
-                <ul class="list-group list-group-flush">
-                    <li class="list-group-item"><strong>Ca\u0142kowity dystans:</strong> {{ "%.2f"|format(route_result.distance) }} km</li>
-                    <li class="list-group-item"><strong>Liczba segment\u00f3w:</strong> {{ route_result.legs|length }}</li>
-                    <li class="list-group-item"><strong>Dni kierowcy:</strong> {{ "%.2f"|format(driver_days) }}</li>
-                </ul>
-            </div>
-            <div class="col-md-6">
-                <h6><i class="fas fa-euro-sign"></i> Koszty:</h6>
-                <ul class="list-group list-group-flush">
-                    <li class="list-group-item"><strong>Op\u0142aty drogowe:</strong> {{ "%.2f"|format(route_result.toll_cost) }} \u20ac</li>
-                    <li class="list-group-item"><strong>Koszt paliwa:</strong> {{ "%.2f"|format(fuel_cost_total) }} \u20ac</li>
-                    <li class="list-group-item"><strong>Koszt kierowcy:</strong> {{ "%.2f"|format(driver_cost_total) }} \u20ac</li>
-                    <li class="list-group-item"><strong>Koszt podlotu:</strong> {{ "%.2f"|format(podlot_cost) }} \u20ac ({{ podlot_km }} km, \u017ar\u00f3d\u0142o: {{ podlot_source }})</li>
-                    <li class="list-group-item" style="background-color: #d4edda;"><strong>CA\u0141KOWITY KOSZT:</strong> <span style="font-size: 1.2em; color: #155724;">{{ "%.2f"|format(total_cost) }} \u20ac</span></li>
-                </ul>
-            </div>
-        </div>
-
-        {% if route_result.segments_info %}
-        <div class="mt-4">
-            <h6><i class="fas fa-list"></i> Segmenty trasy:</h6>
-            <ul class="list-group">
-                {% for segment in route_result.segments_info %}
-                <li class="list-group-item">{{ segment }}</li>
-                {% endfor %}
-            </ul>
-        </div>
-        {% endif %}
-
-        {% if route_result.toll_details %}
-        <div class="mt-4">
-            <h6><i class="fas fa-road"></i> Op\u0142aty drogowe wg kraj\u00f3w:</h6>
-            <ul class="list-group">
-                {% for country, cost in route_result.toll_details.items() %}
-                <li class="list-group-item">{{ country }}: {{ "%.2f"|format(cost) }} \u20ac</li>
-                {% endfor %}
-            </ul>
-        </div>
-        {% endif %}
-    </div>
-</div>
-{% endif %}
-
 <div class="card mt-3">
     <div class="card-header">
         <i class="fas fa-info-circle"></i> Dostępne kody krajów

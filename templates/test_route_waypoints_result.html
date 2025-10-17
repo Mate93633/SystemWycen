@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+
+{% block title %}Wyniki trasy z punktami pośrednimi{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header" style="background-color: #28a745; color: white;">
+        <div>
+            <i class="fas fa-route"></i> Wyniki trasy z punktami pośrednimi
+        </div>
+        <div>
+            <a href="/test_route_form" class="btn btn-light">
+                <i class="fas fa-arrow-left"></i> Powrót do formularza
+            </a>
+        </div>
+    </div>
+    <div class="card-body">
+        {% if matrix_name %}
+        <div class="alert alert-info mb-3">
+            <i class="fas fa-info-circle"></i> Używana macierz marży: <strong>{{ matrix_name }}</strong>
+        </div>
+        {% endif %}
+        
+        <div class="alert alert-secondary mb-3">
+            <i class="fas fa-cog"></i> Parametry obliczeń: 
+            <strong>Koszt paliwa:</strong> {{ "%.2f"|format(fuel_cost) }} €/km | 
+            <strong>Koszt kierowcy + leasing:</strong> {{ "%.0f"|format(driver_cost) }} €/dzień
+            {% if transit_time %}
+            | <strong>Transit time:</strong> {{ transit_time }} dni
+            {% endif %}
+        </div>
+        
+        <div class="alert alert-success mb-4">
+            <h5 style="margin: 0;"><i class="fas fa-map-marked-alt"></i> Trasa: {{ route_request }}</h5>
+        </div>
+        
+        <!-- Główne metryki -->
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header" style="background-color: #17a2b8; color: white;">
+                        <i class="fas fa-road"></i> Dystans i czas
+                    </div>
+                    <div class="card-body">
+                        <ul class="list-group list-group-flush">
+                            <li class="list-group-item d-flex justify-content-between">
+                                <strong>Całkowity dystans:</strong>
+                                <span>{{ "%.2f"|format(route_result.distance) }} km</span>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between">
+                                <strong>Liczba segmentów:</strong>
+                                <span>{{ route_result.legs|length }}</span>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between">
+                                <strong>Transit time (dni):</strong>
+                                <span>{{ "%.2f"|format(driver_days) }}</span>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header" style="background-color: #28a745; color: white;">
+                        <i class="fas fa-euro-sign"></i> Podsumowanie kosztów
+                    </div>
+                    <div class="card-body">
+                        <ul class="list-group list-group-flush">
+                            <li class="list-group-item d-flex justify-content-between">
+                                <strong>Koszt paliwa:</strong>
+                                <span>{{ "%.2f"|format(fuel_cost_total) }} €</span>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between">
+                                <strong>Koszt kierowcy:</strong>
+                                <span>{{ "%.2f"|format(driver_cost_total) }} €</span>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between">
+                                <strong>Opłaty drogowe:</strong>
+                                <span>{{ "%.2f"|format(route_result.toll_cost) }} €</span>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between">
+                                <strong>Koszt podlotu:</strong>
+                                <span>{{ "%.2f"|format(podlot_cost) }} € ({{ podlot_km }} km, źródło: {{ podlot_source }})</span>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between" style="background-color: #d4edda; font-size: 1.1em;">
+                                <strong>CAŁKOWITY KOSZT:</strong>
+                                <strong style="color: #155724;">{{ "%.2f"|format(total_cost) }} €</strong>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Segmenty trasy -->
+        {% if route_result.segments_info %}
+        <div class="card mb-4">
+            <div class="card-header" style="background-color: #6c757d; color: white;">
+                <i class="fas fa-list"></i> Szczegóły segmentów trasy
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Segment</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for segment in route_result.segments_info %}
+                            <tr>
+                                <td>{{ loop.index }}</td>
+                                <td>{{ segment }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        
+        <!-- Opłaty drogowe wg krajów -->
+        {% if route_result.toll_details %}
+        <div class="card mb-4">
+            <div class="card-header" style="background-color: #ffc107; color: #333;">
+                <i class="fas fa-road"></i> Opłaty drogowe wg krajów
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    {% for country, cost in route_result.toll_details.items() %}
+                    <div class="col-md-4 mb-2">
+                        <div class="card">
+                            <div class="card-body">
+                                <h6 class="card-title">{{ country }}</h6>
+                                <p class="card-text" style="font-size: 1.2em; color: #28a745; font-weight: bold;">
+                                    {{ "%.2f"|format(cost) }} €
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        
+        <!-- Przyciski akcji -->
+        <div class="mt-4 text-center">
+            <a href="/test_route_form" class="btn btn-primary btn-lg">
+                <i class="fas fa-plus-circle"></i> Oblicz nową trasę
+            </a>
+            <a href="/" class="btn btn-secondary btn-lg">
+                <i class="fas fa-home"></i> Strona główna
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
