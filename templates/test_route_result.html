@@ -287,6 +287,26 @@
                 </div>
             </div>
             
+            <div id="segments-card" class="card mb-3" style="display: none;">
+                <div class="card-header" style="background-color: #6c757d; color: white;">
+                    <i class="fas fa-list"></i> Segmenty trasy (punkty pośrednie)
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Segment</th>
+                                </tr>
+                            </thead>
+                            <tbody id="segments-list">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            
             <div class="card mb-3">
                 <div class="card-header">
                     <i class="fas fa-info-circle"></i> Szczegóły opłat drogowych
@@ -410,6 +430,21 @@
                     ).join('');
                 } else {
                     countriesList.textContent = 'Brak informacji o krajach na trasie';
+                }
+                
+                // NOWE: Wyświetl segmenty jeśli są waypoints
+                if (data.has_waypoints && data.segments_info && data.segments_info.length > 0) {
+                    const segmentsCard = document.getElementById('segments-card');
+                    const segmentsList = document.getElementById('segments-list');
+                    
+                    segmentsList.innerHTML = data.segments_info.map((segment, index) => 
+                        `<tr>
+                            <td>${index + 1}</td>
+                            <td>${segment}</td>
+                        </tr>`
+                    ).join('');
+                    
+                    segmentsCard.style.display = 'block';
                 }
             })
             .catch(error => {

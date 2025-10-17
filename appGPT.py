@@ -5028,6 +5028,159 @@ def test_truck_route():
     except (ValueError, TypeError):
         driver_cost = DEFAULT_DRIVER_COST
     
+    # ========== NOWE: Sprawdź czy są waypoints ==========
+    waypoints_param = request.args.get('waypoints', '')
+    has_waypoints = bool(waypoints_param and waypoints_param.strip())
+    
+    if has_waypoints:
+        # NOWY FLOW: Trasa z waypointami
+        logger.info(f"API /test_truck_route wywołane z waypoints: {waypoints_param}")
+        
+        try:
+            # Parse waypoints z parametru
+            waypoints_list = []
+            for wp_str in waypoints_param.split(';'):
+                wp_str = wp_str.strip()
+                if not wp_str:
+                    continue
+                
+                # Format: "lat,lon" lub "COUNTRY:POSTAL[:CITY]"
+                if ',' in wp_str and ':' not in wp_str:
+                    # Koordynaty
+                    coords = wp_str.split(',')
+                    lat, lon = float(coords[0]), float(coords[1])
+                    waypoints_list.append(WaypointData(coordinates=(lat, lon)))
+                else:
+                    # Kraj + kod
+                    tokens = wp_str.split(':')
+                    country = tokens[0]
+                    postal = tokens[1] if len(tokens) > 1 else ''
+                    city = tokens[2] if len(tokens) > 2 else None
+                    waypoints_list.append(WaypointData(country=country, postal_code=postal, city=city))
+            
+            # Stwórz RouteRequest
+            coord_from_tuple = tuple(map(float, coord_from.split(',')))
+            coord_to_tuple = tuple(map(float, coord_to.split(',')))
+            
+            route_req = RouteRequest(
+                start=WaypointData(coordinates=coord_from_tuple),
+                end=WaypointData(coordinates=coord_to_tuple),
+                waypoints=waypoints_list,
+                fuel_cost=fuel_cost,
+                driver_cost=driver_cost
+            )
+            
+            # Oblicz trasę
+            result = calculate_multi_waypoint_route(route_req)
+            
+            if not result['success']:
+                return jsonify({'error': result.get('error_message', 'Błąd obliczania trasy')})
+            
+            # Dystans i dane trasy
+            dist = result['distance']
+            road_toll = result['road_toll']
+            other_toll = result['other_toll']
+            total_toll = result['toll_cost']
+            toll_details = result['toll_details']
+            special_systems = result['special_systems']
+            segments_info = result['segments_info']
+            
+            # Oblicz koszty (jak w starym flow)
+            fuel_cost_value = dist * fuel_cost
+            
+            if transit_time is not None:
+                driver_days = transit_time
+            else:
+                driver_days = calculate_driver_days(dist)
+            
+            driver_cost_value = driver_days * driver_cost if driver_days else 0
+            
+            # Podlot
+            rates = get_all_rates(load_country, load_postal, unload_country, unload_postal, coord_from_tuple, coord_to_tuple)
+            region_rates = get_region_based_rates(load_country, load_postal, unload_country, unload_postal)
+            podlot, podlot_source = get_podlot(rates, region_rates)
+            oplaty_drogowe_podlot = calculate_podlot_toll(podlot, fuel_cost_per_km=fuel_cost)
+            
+            # Suma kosztów
+            suma_kosztow = calculate_total_costs([road_toll, fuel_cost_value, driver_cost_value, other_toll, oplaty_drogowe_podlot])
+            
+            # Regiony i stawki (jak w starym flow)
+            loading_region = get_region(normalize_country(load_country), load_postal)
+            unloading_region = get_region(normalize_country(unload_country), unload_postal)
+            
+            driver_days_for_profit = transit_time if transit_time else calculate_driver_days(dist)
+            expected_profit, unit_margin, margin_source = calculate_expected_profit(loading_region, unloading_region, driver_days_for_profit)
+            
+            best_rates = get_best_rates(rates, region_rates)
+            hist_rate = best_rates['hist_rate']
+            gielda_rate = best_rates['gielda_rate']
+            
+            total_distance = dist + podlot
+            
+            # Sugerowane frachty
+            if hist_rate and total_distance > 0:
+                suggested_fracht_historical = total_distance * hist_rate
+            elif gielda_rate and total_distance > 0:
+                suggested_fracht_historical = total_distance * gielda_rate
+            else:
+                suggested_fracht_historical = None
+            
+            suggested_fracht_matrix = suma_kosztow + expected_profit if suma_kosztow and expected_profit else None
+            
+            # Format odpowiedzi
+            toll_text = format_toll_details(toll_details, road_toll, other_toll, special_systems)
+            toll_per_km = calculate_toll_per_km(road_toll, dist)
+            countries = list(toll_details.keys()) if toll_details else []
+            
+            def safe_value(value):
+                return value if value is not None else 0
+            
+            # Przygotuj odpowiedź z dodatkowymi informacjami o segmentach
+            response = {
+                'distance': round(dist, 2),
+                'polyline': result.get('polyline', ''),
+                'podlot': safe_value(podlot),
+                'podlot_source': podlot_source,
+                'oplaty_drogowe': safe_value(format_currency(road_toll)),
+                'oplaty_dodatkowe': safe_value(format_currency(other_toll)),
+                'oplaty_na_km': safe_value(format_currency(toll_per_km)),
+                'koszt_paliwa': safe_value(format_currency(fuel_cost_value)),
+                'koszt_kierowcy': safe_value(format_currency(driver_cost_value)),
+                'oplaty_drogowe_podlot': safe_value(format_currency(oplaty_drogowe_podlot)),
+                'suma_kosztow': safe_value(format_currency(suma_kosztow)),
+                'sugerowany_fracht_historyczny': safe_value(format_currency(suggested_fracht_historical)),
+                'sugerowany_fracht_matrix': safe_value(format_currency(suggested_fracht_matrix)),
+                'oczekiwany_zysk': safe_value(format_currency(expected_profit)),
+                'marga_jednostkowa': safe_value(format_currency(unit_margin)),
+                'zrodlo_marzy': margin_source,
+                'loading_region': loading_region,
+                'unloading_region': unloading_region,
+                'transit_time_dni': driver_days,
+                'szczegoly_oplat': toll_text,
+                'kraje': countries,
+                'map_link': create_google_maps_link(coord_from_tuple, coord_to_tuple, result.get('polyline', '')),
+                # Regionalne stawki (jak w starym flow)
+                'region_klient_stawka_3m': format_currency(region_rates.get('klient_stawka_3m')),
+                'region_klient_stawka_6m': format_currency(region_rates.get('klient_stawka_6m')),
+                'region_klient_stawka_12m': format_currency(region_rates.get('klient_stawka_12m')),
+                'region_gielda_stawka_3m': format_currency(region_rates.get('gielda_stawka_3m')),
+                'region_gielda_stawka_6m': format_currency(region_rates.get('gielda_stawka_6m')),
+                'region_gielda_stawka_12m': format_currency(region_rates.get('gielda_stawka_12m')),
+                # NOWE: Informacje o segmentach
+                'has_waypoints': True,
+                'waypoints_count': len(waypoints_list),
+                'segments_info': segments_info,
+                'legs': result.get('legs', [])
+            }
+            
+            logger.info(f"Waypoints route calculated: {dist:.1f}km, {len(segments_info)} segments")
+            return jsonify(response)
+            
+        except Exception as e:
+            logger.error(f"Błąd obliczania trasy z waypoints: {e}", exc_info=True)
+            return jsonify({'error': str(e)})
+    
+    # ========== STARY FLOW: bez waypoints ==========
     if not coord_from or not coord_to:
         return jsonify({'error': 'Brak współrzędnych'})
     
