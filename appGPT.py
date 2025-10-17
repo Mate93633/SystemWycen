@@ -5159,13 +5159,13 @@ def test_truck_route():
                 'szczegoly_oplat': toll_text,
                 'kraje': countries,
                 'map_link': create_google_maps_link(coord_from_tuple, coord_to_tuple, result.get('polyline', '')),
-                # Regionalne stawki (jak w starym flow)
-                'region_klient_stawka_3m': format_currency(region_rates.get('klient_stawka_3m')),
-                'region_klient_stawka_6m': format_currency(region_rates.get('klient_stawka_6m')),
-                'region_klient_stawka_12m': format_currency(region_rates.get('klient_stawka_12m')),
-                'region_gielda_stawka_3m': format_currency(region_rates.get('gielda_stawka_3m')),
-                'region_gielda_stawka_6m': format_currency(region_rates.get('gielda_stawka_6m')),
-                'region_gielda_stawka_12m': format_currency(region_rates.get('gielda_stawka_12m')),
+                # Regionalne stawki (jak w starym flow - POPRAWIONE KLUCZE)
+                'region_klient_stawka_3m': format_currency(region_rates.get('region_klient_stawka_3m')),
+                'region_klient_stawka_6m': format_currency(region_rates.get('region_klient_stawka_6m')),
+                'region_klient_stawka_12m': format_currency(region_rates.get('region_klient_stawka_12m')),
+                'region_gielda_stawka_3m': format_currency(region_rates.get('region_gielda_stawka_3m')),
+                'region_gielda_stawka_6m': format_currency(region_rates.get('region_gielda_stawka_6m')),
+                'region_gielda_stawka_12m': format_currency(region_rates.get('region_gielda_stawka_12m')),
                 # NOWE: Informacje o segmentach
                 'has_waypoints': True,
                 'waypoints_count': len(waypoints_list),
