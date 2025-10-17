@@ -4873,7 +4873,7 @@ def test_route_form():
                 coord_to = (route_req.end.coordinates[0], route_req.end.coordinates[1]) if route_req.end.is_geocoded() else None
                 
                 rates = get_all_rates(load_country, load_postal, unload_country, unload_postal, coord_from, coord_to)
-                region_rates = get_region_rates(load_country, load_postal, unload_country, unload_postal)
+                region_rates = get_region_based_rates(load_country, load_postal, unload_country, unload_postal)
                 
                 podlot_km, podlot_source = get_podlot(rates, region_rates)
                 podlot_cost = calculate_podlot_toll(podlot_km, fuel_cost_per_km=fuel_cost)
