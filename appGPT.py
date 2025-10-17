@@ -142,6 +142,14 @@ class WaypointData:
         self.country = self.country.upper().strip()
         self.postal_code = self.postal_code.strip()
         
+        # Konwersja pełnej nazwy kraju na kod ISO (np. "GERMANY" -> "DE")
+        if len(self.country) > 2:
+            iso_code = COUNTRY_TO_ISO.get(self.country)
+            if iso_code:
+                self.country = iso_code
+            else:
+                raise ValueError(f"Nieznana nazwa kraju: '{self.country}'. Użyj kodu ISO (np. DE) lub pełnej nazwy (np. GERMANY)")
+        
         # Walidacja kodu kraju (2 litery)
         if len(self.country) != 2 or not self.country.isalpha():
             raise ValueError(f"Kod kraju musi mieć 2 litery (ISO 3166-1): '{self.country}'")
@@ -269,6 +277,7 @@ session_manager = SessionManager(max_age_hours=24)
 
 # Mapowanie krajów – ujednolicone nazwy
 COUNTRY_MAPPING = {
+    # Kody ISO -> pełne nazwy
     'PL': 'Poland', 'Polska': 'Poland',
     'DE': 'Germany', 'Niemcy': 'Germany',
     'FR': 'France', 'Francja': 'France',
@@ -291,13 +300,44 @@ COUNTRY_MAPPING = {
     'BG': 'Bulgaria', 'Bułgaria': 'Bulgaria',
     'EE': 'Estonia', 'Estonia': 'Estonia',
     'HR': 'Croatia', 'Chorwacja': 'Croatia',
-    'IE': 'Ireland', 'Irlandia': 'Ireland',  # Użyto "Irlandia" jako poprawnej wersji
+    'IE': 'Ireland', 'Irlandia': 'Ireland',
     'LT': 'Lithuania', 'Litwa': 'Lithuania',
     'LV': 'Latvia', 'Łotwa': 'Latvia',
     'RO': 'Romania', 'Rumunia': 'Romania',
     'UK': 'United Kingdom', 'Wielka Brytania': 'United Kingdom',
     'LU': 'Luxembourg', 'Luksemburg': 'Luxembourg'
+}
 
+# Mapowanie pełnych nazw krajów -> kody ISO (dla waypoints)
+COUNTRY_TO_ISO = {
+    'POLAND': 'PL', 'POLSKA': 'PL',
+    'GERMANY': 'DE', 'NIEMCY': 'DE',
+    'FRANCE': 'FR', 'FRANCJA': 'FR',
+    'ITALY': 'IT', 'WŁOCHY': 'IT', 'WLOCHY': 'IT',
+    'SPAIN': 'ES', 'HISZPANIA': 'ES',
+    'NETHERLANDS': 'NL', 'HOLANDIA': 'NL',
+    'BELGIUM': 'BE', 'BELGIA': 'BE',
+    'CZECH REPUBLIC': 'CZ', 'CZECHY': 'CZ',
+    'AUSTRIA': 'AT',
+    'SLOVAKIA': 'SK', 'SŁOWACJA': 'SK', 'SLOWACJA': 'SK',
+    'SLOVENIA': 'SI', 'SŁOWENIA': 'SI', 'SLOWENIA': 'SI',
+    'HUNGARY': 'HU', 'WĘGRY': 'HU', 'WEGRY': 'HU',
+    'PORTUGAL': 'PT', 'PORTUGALIA': 'PT',
+    'GREECE': 'GR', 'GRECJA': 'GR',
+    'SWITZERLAND': 'CH', 'SZWAJCARIA': 'CH',
+    'SWEDEN': 'SE', 'SZWECJA': 'SE',
+    'FINLAND': 'FI', 'FINLANDIA': 'FI',
+    'NORWAY': 'NO', 'NORWEGIA': 'NO',
+    'DENMARK': 'DK', 'DANIA': 'DK',
+    'BULGARIA': 'BG', 'BUŁGARIA': 'BG', 'BULGARIA': 'BG',
+    'ESTONIA': 'EE',
+    'CROATIA': 'HR', 'CHORWACJA': 'HR',
+    'IRELAND': 'IE', 'IRLANDIA': 'IE',
+    'LITHUANIA': 'LT', 'LITWA': 'LT',
+    'LATVIA': 'LV', 'ŁOTWA': 'LV', 'LOTWA': 'LV',
+    'ROMANIA': 'RO', 'RUMUNIA': 'RO',
+    'UNITED KINGDOM': 'UK', 'WIELKA BRYTANIA': 'UK',
+    'LUXEMBOURG': 'LU', 'LUKSEMBURG': 'LU'
 }
 
 # Definicja wyjątku
@@ -4012,9 +4052,10 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
 
         except Exception as e:
             current_row_num = user_data.current_row if user_data else (CURRENT_ROW if 'CURRENT_ROW' in globals() else i+1)
-            print(f"\n❌ BŁĄD w wierszu {current_row_num}: {str(e)}")
-            print(f"Szczegóły wiersza: {dict(row)}")
-            print("Traceback:")
+            # Używamy logger zamiast print, żeby uniknąć problemów z emoji/unicode
+            logger.error(f"BLAD w wierszu {current_row_num}: {str(e)}")
+            logger.error(f"Szczegoly wiersza: {dict(row)}")
+            logger.error("Traceback:", exc_info=True)
             import traceback
             traceback.print_exc()
             
