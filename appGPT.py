@@ -3616,26 +3616,38 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
     # Przypisanie nazw kolumn - obsługa różnych formatów
     # Format 1: 6 kolumn (stary) - bez transit time
     # Format 2: 7 kolumn - z transit time
-    # Format 3: 8 kolumn - z Punkty_posrednie i transit time
-    
-    expected_columns_base = ['Kraj zaladunku', 'Kod zaladunku', 'Miasto zaladunku',
-                             'Kraj rozladunku', 'Kod rozładunku', 'Miasto rozładunku']
+    # Format 3: 8 kolumn - z Punkty_posrednie MIĘDZY załadunkiem a rozładunkiem!
     
     if len(df.columns) == 8:
-        # Nowy format z waypointami: 6 podstawowych + Punkty_posrednie + transit time
-        df.columns = expected_columns_base + ['Punkty_posrednie', 'transit time']
+        # Nowy format z waypointami: Załadunek (3) + Punkty_posrednie + Rozładunek (3) + transit time
+        # UWAGA: Punkty_posrednie są NA 4. POZYCJI (indeks 3)!
+        df.columns = [
+            'Kraj zaladunku', 'Kod zaladunku', 'Miasto zaladunku',
+            'Punkty_posrednie',  # ← TUTAJ, między załadunkiem a rozładunkiem
+            'Kraj rozladunku', 'Kod rozładunku', 'Miasto rozładunku',
+            'transit time'
+        ]
         print(f"Nowy format pliku - {len(df.columns)} kolumn z 'Punkty_posrednie' i 'transit time'")
     elif len(df.columns) == 7:
-        # Sprawdź czy to stary format (7 kolumn z transit time) czy nowy (6 + Punkty_posrednie)
-        # Dla kompatybilności zakładamy format z transit time
-        df.columns = expected_columns_base + ['transit time']
+        # Stary format: 6 podstawowych + transit time
+        df.columns = [
+            'Kraj zaladunku', 'Kod zaladunku', 'Miasto zaladunku',
+            'Kraj rozladunku', 'Kod rozładunku', 'Miasto rozładunku',
+            'transit time'
+        ]
         print(f"Standardowy format pliku - {len(df.columns)} kolumn z 'transit time'")
     elif len(df.columns) == 6:
         # Stary format - tylko 6 kolumn bez transit time
-        df.columns = expected_columns_base
+        df.columns = [
+            'Kraj zaladunku', 'Kod zaladunku', 'Miasto zaladunku',
+            'Kraj rozladunku', 'Kod rozładunku', 'Miasto rozładunku'
+        ]
         print(f"Stary format pliku - {len(df.columns)} kolumn bez 'transit time'")
     else:
         print(f"UWAGA: Nieoczekiwana liczba kolumn: {len(df.columns)}")
+        # Fallback - przypisz co się da
+        expected_columns_base = ['Kraj zaladunku', 'Kod zaladunku', 'Miasto zaladunku',
+                                 'Kraj rozladunku', 'Kod rozładunku', 'Miasto rozładunku']
         df.columns = expected_columns_base[:len(df.columns)]
     
     print(f"Nazwy kolumn: {list(df.columns)}")

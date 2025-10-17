@@ -13,8 +13,15 @@
         <div class="alert alert-info">
             <i class="fas fa-info-circle"></i> <strong>Format pliku Excel:</strong>
             <ul class="mb-0 mt-2">
-                <li><strong>Kolumny wymagane:</strong> Kraj załadunku, Kod pocztowy załadunku, Miasto załadunku, Kraj rozładunku, Kod pocztowy rozładunku, Miasto rozładunku</li>
-                <li><strong>Kolumna opcjonalna:</strong> <code>Punkty_posrednie</code> - możesz podać:
+                <li><strong>Kolejność kolumn:</strong>
+                    <ol class="mt-1 mb-2">
+                        <li>Kraj załadunku, Kod pocztowy załadunku, Miasto załadunku</li>
+                        <li><strong><code>Punkty_posrednie</code> (opcjonalna)</strong></li>
+                        <li>Kraj rozładunku, Kod pocztowy rozładunku, Miasto rozładunku</li>
+                        <li>transit time (opcjonalna)</li>
+                    </ol>
+                </li>
+                <li><strong>Format kolumny Punkty_posrednie:</strong>
                     <ul class="mt-1">
                         <li><strong>Kraj + kod:</strong> <code>"CZ:11000;AT:1010"</code></li>
                         <li><strong>Z miastem:</strong> <code>"CZ:11000:Praha;AT:1010:Wien"</code></li>
