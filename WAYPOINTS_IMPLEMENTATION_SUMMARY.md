@@ -1,9 +1,10 @@
 # Podsumowanie Wdrożenia - Punkty Pośrednie Tras
 
-## ✅ Status: ZAIMPLEMENTOWANE (Backend + UI)
+## ✅ Status: ZAIMPLEMENTOWANE (Backend + UI + Excel)
 
 **Branch:** `feature/waypoints-complete`  
-**Data wdrożenia:** 17 października 2025
+**Data wdrożenia:** 17 października 2025  
+**Ostatnia aktualizacja:** 17 października 2025 - dodano obsługę Excel
 
 ---
 
@@ -45,17 +46,34 @@
 
 ✅ **Dodano pola miasto** dla punktów załadunku i rozładunku
 
+### 4. Excel Support (appGPT.py + templates/upload.html)
+✅ **Dodano funkcję `parse_waypoints_from_excel_row()`**:
+- Parsowanie kolumny `Punkty_posrednie`
+- Format Compact: `"CZ:11000;AT:1010"`
+- Z miastami: `"CZ:11000:Praha;AT:1010:Wien"`
+- Walidacja i error handling
+
+✅ **Integracja z `process_przetargi()`**:
+- Automatyczne wykrywanie waypoints w Excel
+- Użycie `calculate_multi_waypoint_route()` dla tras z waypoints
+- Backward compatibility: stare pliki działają bez zmian
+
+✅ **Aktualizacja UI (upload.html)**:
+- Instrukcje użycia kolumny `Punkty_posrednie`
+- Przykłady formatowania
+- Wyjaśnienie opcjonalności
+
 ---
 
 ## 📊 Statystyki Implementacji
 
 | Metryka | Wartość |
 |---------|---------|
-| Dodane linie kodu | ~750 |
-| Zmodyfikowane pliki | 3 (appGPT.py, ptv_api_manager.py, test_route_form.html) |
-| Nowe metody/funkcje | 6 |
-| Commit | 2 |
-| Czas implementacji | ~2h |
+| Dodane linie kodu | ~900 |
+| Zmodyfikowane pliki | 4 (appGPT.py, ptv_api_manager.py, test_route_form.html, upload.html) |
+| Nowe metody/funkcje | 7 |
+| Commit | 4 |
+| Czas implementacji | ~3h |
 
 ---
 
@@ -79,11 +97,36 @@ Punkt 2: AT 1010 (Wien)
 Rozładunek: DE 10115 (Berlin)
 ```
 
+### Wycena przetargowa (Excel) z waypointami
+
+**Format Excel:**
+```
+| Kraj załadunku | Kod załadunku | Punkty_posrednie    | Kraj rozładunku | Kod rozładunku |
+|----------------|---------------|---------------------|-----------------|----------------|
+| PL             | 00-001        | CZ:11000;AT:1010    | DE              | 10115          |
+| FR             | 75001         | CH:8000             | IT              | 20100          |
+| PL             | 02-001        |                     | DE              | 20000          |
+```
+
+**Z miastami:**
+```
+| Punkty_posrednie                    |
+|-------------------------------------|
+| CZ:11000:Praha;AT:1010:Wien        |
+```
+
+**Uwagi:**
+- Kolumna `Punkty_posrednie` jest **opcjonalna**
+- Format: `KRAJ:KOD` lub `KRAJ:KOD:MIASTO`
+- Separator punktów: średnik `;`
+- Puste wartości = trasa bez waypoints (stary flow)
+
 ### Backward Compatibility
 
 - ✅ Stare wyceny bez waypoints działają bez zmian
 - ✅ Istniejący flow nie został naruszony
 - ✅ Jeśli nie dodasz waypoints, aplikacja używa starego kodu
+- ✅ Excel bez kolumny `Punkty_posrednie` działa jak wcześniej
 
 ---
 
@@ -109,11 +152,11 @@ Rozładunek: DE 10115 (Berlin)
 
 ## 📝 Co JESZCZE DO ZROBIENIA (opcjonalnie)
 
-### Faza 2: Excel Support
-- [ ] Parser waypoints z Excel (format compact: "PL:00-001;CZ:11000")
-- [ ] Parser waypoints z Excel (format expanded: kolumny)
-- [ ] Integracja z `process_przetargi()`
-- [ ] Testy dla parsera
+### ~~Faza 2: Excel Support~~ ✅ ZROBIONE
+- [x] Parser waypoints z Excel (format compact: "PL:00-001;CZ:11000")
+- [x] Integracja z `process_przetargi()`
+- [ ] Parser waypoints z Excel (format expanded: kolumny) - opcjonalne
+- [ ] Testy dla parsera - opcjonalne
 
 ### Faza 3: UI Improvements  
 - [ ] Template wyników z szczegółami segmentów
@@ -136,6 +179,8 @@ git branch
 # * feature/waypoints-complete
 
 git log --oneline
+# 385ded2 feat: Add waypoints support for Excel upload (Compact format)
+# e7be4a6 docs: Add implementation summary for waypoints feature
 # 3cfbb9a feat: Add waypoints UI to route form
 # ac58679 feat: Add waypoints support - Backend implementation
 ```
@@ -201,11 +246,12 @@ key = (
 
 ## 🐛 Known Issues / Limitations
 
-1. **Excel support**: Nie zaimplementowano (Faza 2)
+1. ~~**Excel support**: Nie zaimplementowano~~ ✅ **ZROBIONE** - format Compact działa
 2. **Template wyników**: Używamy istniejącego template (brak szczegółów segmentów w UI)
 3. **Mapa**: Brak wizualizacji wszystkich punktów na mapie Google
 4. **Walidacja**: Brak walidacji kodów pocztowych w UI (tylko w backend)
-5. **Max waypoints**: Limit 5 (arbitralny - PTV wspiera do 25)
+5. **Max waypoints**: Limit 5 w UI (arbitralny - PTV wspiera do 25)
+6. **Excel format expanded**: Nie zaimplementowano (tylko Compact działa)
 
 ---
 
@@ -227,9 +273,11 @@ Implementacja funkcjonalności punktów pośrednich **ZAKOŃCZONA SUKCESEM** dla
 - ✅ Backend API (PTV integration)
 - ✅ Cache rozszerzony
 - ✅ Frontend UI (dynamiczne pola)
+- ✅ Excel support (format Compact)
 - ✅ Backward compatibility zachowana
+- ✅ Pełna dokumentacja
 
-**Gotowe do testów i merge!** 🚀
+**Gotowe do testów i merge!** 🚀🎉
 
 ---
 
