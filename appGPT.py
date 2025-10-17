@@ -4868,8 +4868,14 @@ def test_route_form():
                 driver_cost_total = driver_days * driver_cost if driver_days else 0
                 
                 # Podlot (tylko dla pierwszego segmentu)
-                # Używamy domyślnej wartości 100 km dla formularza testowego
-                podlot_km = 100
+                # Pobierz podlot z danych historycznych tak jak w starym flow
+                coord_from = (route_req.start.coordinates[0], route_req.start.coordinates[1]) if route_req.start.is_geocoded() else None
+                coord_to = (route_req.end.coordinates[0], route_req.end.coordinates[1]) if route_req.end.is_geocoded() else None
+                
+                rates = get_all_rates(load_country, load_postal, unload_country, unload_postal, coord_from, coord_to)
+                region_rates = get_region_rates(load_country, load_postal, unload_country, unload_postal)
+                
+                podlot_km, podlot_source = get_podlot(rates, region_rates)
                 podlot_cost = calculate_podlot_toll(podlot_km, fuel_cost_per_km=fuel_cost)
                 
                 total_cost = (
@@ -4888,6 +4894,8 @@ def test_route_form():
                     fuel_cost_total=fuel_cost_total,
                     driver_cost_total=driver_cost_total,
                     driver_days=driver_days,
+                    podlot_km=podlot_km,
+                    podlot_source=podlot_source,
                     podlot_cost=podlot_cost,
                     total_cost=total_cost,
                     matrix_name=matrix_type.title()
