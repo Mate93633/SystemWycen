@@ -33,10 +33,12 @@ System Wyceny Tras to zaawansowana aplikacja przeznaczona do automatyzacji proce
 
 - ✅ Automatyczne obliczanie kosztów transportu dla tras europejskich
 - ✅ Przetwarzanie wsadowe plików Excel z wieloma trasami
+- ✅ **NOWOŚĆ: Równoczesne korzystanie przez wielu użytkowników** 🎉
 - ✅ Precyzyjne geokodowanie lokalizacji
 - ✅ Integrację z API PTV Group dla tras i opłat drogowych
 - ✅ Optymalizację tras z unikaniem wybranych krajów
 - ✅ Kalkulację marży na podstawie danych historycznych
+- ✅ **Izolację danych między użytkownikami**
 
 ### 🎯 Obszar zastosowań
 - Firmy spedycyjne i transportowe
@@ -173,6 +175,23 @@ Wyceny/
 - `locations_cache`: Zweryfikowane lokalizacje
 
 ## ⭐ Funkcjonalności
+
+### 👥 Wsparcie wieloużytkownikowe (NOWOŚĆ v2.0)
+
+**Równoczesne przetwarzanie:**
+- Wielu użytkowników może korzystać z aplikacji jednocześnie
+- Każdy użytkownik ma izolowaną sesję z własnymi danymi
+- Brak konfliktów i nadpisywania wyników
+
+**Bezpieczeństwo:**
+- Unikalne identyfikatory sesji (32-bajtowe tokeny)
+- HttpOnly cookies
+- Automatyczne czyszczenie starych sesji (24h)
+
+**Monitoring:**
+- `/admin/sessions` - podgląd aktywnych sesji
+- `/admin/cleanup_sessions` - wymuś czyszczenie
+- Logi per-sesja z unikalnym prefixem
 
 ### 📊 Przetwarzanie wsadowe plików Excel
 

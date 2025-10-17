@@ -32,8 +32,16 @@ import csv
 from ptv_api_manager import PTVRouteManager
 import openpyxl
 import hashlib
+import secrets
+import atexit
+from datetime import timedelta
 
-# Blokada dla bezpiecznej aktualizacji zmiennych globalnych
+# Import nowych modułów do zarządzania sesjami
+from session_manager import SessionManager, SessionCleanupScheduler
+from user_session_data import UserSessionData
+
+# Blokada dla bezpiecznej aktualizacji zmiennych globalnych (używana przez starszy kod)
+# TODO: Stopniowo usunąć po pełnej migracji do SessionManager
 progress_lock = threading.Lock()
 
 # Globalny słownik lookup
@@ -111,42 +119,12 @@ locations_cache = Cache("locations_cache")
 # Inicjalizacja menedżera PTV
 ptv_manager = PTVRouteManager(PTV_API_KEY)
 
-# Zmienne globalne do śledzenia postępu
-PROGRESS = 0
-RESULT_EXCEL = None
-CURRENT_ROW = 0
-TOTAL_ROWS = 0
-PROCESSING_COMPLETE = False  # Dodaję tę zmienną
-
+# === ZMIENNE GLOBALNE - TYLKO DLA LEGACY MODE DEKORATORA ===
 GEOCODING_TOTAL = 0
-LOCATIONS_TO_VERIFY = []
 GEOCODING_CURRENT = 0
 
-# Dane do podglądu w tabeli
-PREVIEW_DATA = {
-    'headers': [
-        'Kraj załadunku',
-        'Kod pocztowy załadunku',
-        'Kraj rozładunku',
-        'Kod pocztowy rozładunku',
-        'Dystans (km)',
-        'Podlot (km)',  # Ta kolumna już istnieje
-        'Koszt paliwa',
-        'Opłaty drogowe',
-        'Koszt kierowcy + leasing',
-        'Koszt podlotu (opłaty + paliwo)',
-        'Opłaty/km',
-        'Opłaty drogowe (szczegóły)',
-        'Suma kosztów',
-        'Link do mapy',
-        'Sugerowany fracht wg historycznych stawek',
-        'Sugerowany fracht wg matrixa',
-        'Oczekiwany zysk',
-        'Transit time (dni)'
-    ],
-    'rows': [],
-    'total_count': 0
-}
+# Inicjalizacja SessionManager - zarządzanie sesjami użytkowników
+session_manager = SessionManager(max_age_hours=24)
 
 # Mapowanie krajów – ujednolicone nazwy
 COUNTRY_MAPPING = {
@@ -3010,7 +2988,19 @@ def get_all_rates(lc, lp, uc, up, lc_coords, uc_coords):
 def modify_process_przetargi(process_func):
     @wraps(process_func)
     def wrapper(*args, **kwargs):
-        global GEOCODING_CURRENT, GEOCODING_TOTAL
+        # Pobierz session_id z kwargs lub None dla legacy mode
+        session_id = kwargs.get('session_id', None)
+        
+        # Pobierz user_data jeśli session_id istnieje
+        if session_id:
+            user_data = session_manager.get_session(session_id, create_if_missing=False)
+            session_id_short = session_id[:8]
+        else:
+            # Legacy mode - użyj globalnych zmiennych
+            user_data = None
+            session_id_short = "LEGACY"
+            global GEOCODING_CURRENT, GEOCODING_TOTAL
+        
         df = args[0]
         unique_locations = set()
         for _, row in df.iterrows():
@@ -3030,27 +3020,48 @@ def modify_process_przetargi(process_func):
                 str(row['kod_pocztowy_rozladunku']).strip(),
                 city_unload.strip()
             ))
-        print(">>> Wywołanie geokodowania dla unikalnych lokalizacji:")
-        with progress_lock:
-            GEOCODING_TOTAL = len(unique_locations)
-            GEOCODING_CURRENT = 0
-        for loc in unique_locations:
-            print("Geokodowanie:", loc)
-            get_coordinates(*loc)
-            with progress_lock:
-                GEOCODING_CURRENT += 1
-                print(get_geocoding_progress())
         
-        # Upewnij się, że po zakończeniu geokodowania postęp wynosi 100%
-        with progress_lock:
-            GEOCODING_CURRENT = GEOCODING_TOTAL
+        logger.info(f"[{session_id_short}] Geokodowanie {len(unique_locations)} unikalnych lokalizacji")
+        
+        # Ustaw geocoding total
+        if user_data:
+            user_data.geocoding_total = len(unique_locations)
+            user_data.geocoding_current = 0
+        else:
+            # Legacy mode
+            with progress_lock:
+                GEOCODING_TOTAL = len(unique_locations)
+                GEOCODING_CURRENT = 0
+        
+        # Geokoduj każdą lokalizację
+        for loc in unique_locations:
+            logger.debug(f"[{session_id_short}] Geokodowanie: {loc}")
+            get_coordinates(*loc)
             
+            # Aktualizuj postęp
+            if user_data:
+                user_data.geocoding_current += 1
+            else:
+                # Legacy mode
+                with progress_lock:
+                    GEOCODING_CURRENT += 1
+        
+        # Upewnij się, że postęp wynosi 100%
+        if user_data:
+            user_data.geocoding_current = user_data.geocoding_total
+        else:
+            # Legacy mode
+            with progress_lock:
+                GEOCODING_CURRENT = GEOCODING_TOTAL
+            
+        # Sprawdź czy są niegeokodowane lokalizacje
         ungeocoded = get_ungeocoded_locations(df)
         if ungeocoded:
-            print(">>> Nierozpoznane lokalizacje po geokodowaniu:", ungeocoded)
+            logger.warning(f"[{session_id_short}] Znaleziono {len(ungeocoded)} nierozpoznanych lokalizacji")
             raise GeocodeException(ungeocoded)
         else:
-            print(">>> Wszystkie lokalizacje zostały poprawnie zgeokodowane.")
+            logger.info(f"[{session_id_short}] Wszystkie lokalizacje zgeokodowane pomyślnie")
+        
         return process_func(*args, **kwargs)
     return wrapper
 
@@ -3152,39 +3163,65 @@ def create_google_maps_link(coord_from, coord_to, polyline_str):
         return f"https://www.google.com/maps/dir/{coord_from[0]},{coord_from[1]}/{coord_to[0]},{coord_to[1]}"
 
 @modify_process_przetargi
-def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVER_COST):
-    global PROGRESS, TOTAL_ROWS, PREVIEW_DATA, CURRENT_ROW, GEOCODING_TOTAL, RESULT_EXCEL
+def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVER_COST, session_id=None):
+    """
+    Główna funkcja przetwarzająca dane z pliku Excel.
+    
+    Args:
+        df: DataFrame pandas z danymi do przetworzenia
+        fuel_cost: Koszt paliwa EUR/km
+        driver_cost: Koszt kierowcy EUR/dzień
+        session_id: ID sesji użytkownika (None dla kompatybilności wstecznej)
+    """
+    # Pobierz dane sesji jeśli podano session_id
+    if session_id:
+        user_data = session_manager.get_session(session_id, create_if_missing=False)
+        if user_data is None:
+            logger.error(f"[{session_id[:8]}] Nie znaleziono sesji w process_przetargi!")
+            return
+        session_id_short = session_id[:8]
+    else:
+        # Tryb kompatybilności wstecznej - użyj globalnych zmiennych (deprecated)
+        user_data = None
+        session_id_short = "LEGACY"
+    
     results = []
 
-    with progress_lock:
-        TOTAL_ROWS = len(df)
-        PROGRESS = 0
-        PREVIEW_DATA = {
-            'headers': [
-                'Kraj załadunku',
-                'Kod pocztowy załadunku',
-                'Kraj rozładunku',
-                'Kod pocztowy rozładunku',
-                'Dystans (km)',
-                'Podlot (km)',  # Ta kolumna już istnieje
-                'Koszt paliwa',
-                'Opłaty drogowe',
-                'Koszt kierowcy + leasing',
-                'Koszt podlotu (opłaty + paliwo)',
-                'Opłaty/km',
-                'Opłaty drogowe (szczegóły)',
-                'Suma kosztów',
-                'Link do mapy',
-                'Sugerowany fracht wg historycznych stawek',
-                'Sugerowany fracht wg matrixa',
-                'Oczekiwany zysk',
-                'Transit time (dni)'  # Zmieniono z "Dni kierowcy"
-            ],
-            'rows': [],
-            'total_count': TOTAL_ROWS
-        }
-        # Usuwam niepotrzebne ustawienie GEOCODING_TOTAL, ponieważ jest już ustawiane w dekoratorze
-        # GEOCODING_TOTAL = TOTAL_ROWS * 2
+    # Inicjalizacja danych sesji
+    if user_data:
+        user_data.total_rows = len(df)
+        user_data.progress = 0
+        user_data.preview_data['total_count'] = user_data.total_rows
+    else:
+        # Legacy mode - użyj globalnych zmiennych
+        global PROGRESS, TOTAL_ROWS, PREVIEW_DATA, CURRENT_ROW, GEOCODING_TOTAL, RESULT_EXCEL
+        with progress_lock:
+            TOTAL_ROWS = len(df)
+            PROGRESS = 0
+            PREVIEW_DATA = {
+                'headers': [
+                    'Kraj załadunku',
+                    'Kod pocztowy załadunku',
+                    'Kraj rozładunku',
+                    'Kod pocztowy rozładunku',
+                    'Dystans (km)',
+                    'Podlot (km)',
+                    'Koszt paliwa',
+                    'Opłaty drogowe',
+                    'Koszt kierowcy + leasing',
+                    'Koszt podlotu (opłaty + paliwo)',
+                    'Opłaty/km',
+                    'Opłaty drogowe (szczegóły)',
+                    'Suma kosztów',
+                    'Link do mapy',
+                    'Sugerowany fracht wg historycznych stawek',
+                    'Sugerowany fracht wg matrixa',
+                    'Oczekiwany zysk',
+                    'Transit time (dni)'
+                ],
+                'rows': [],
+                'total_count': TOTAL_ROWS
+            }
 
         # Przypisanie nazw kolumn - oczekujemy 7 kolumn (6 standardowych + transit time)
     expected_columns = ['Kraj zaladunku', 'Kod zaladunku', 'Miasto zaladunku',
@@ -3206,9 +3243,15 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
 
     for i, row in df.iterrows():
         try:
-            with progress_lock:
-                CURRENT_ROW = i + 1  # Aktualizacja numeru aktualnie przetwarzanego wiersza
-                PROGRESS = int((CURRENT_ROW / TOTAL_ROWS) * 100)  # Aktualizacja procentowego postępu
+            # Aktualizacja postępu
+            if user_data:
+                user_data.current_row = i + 1
+                user_data.progress = int((user_data.current_row / user_data.total_rows) * 100)
+            else:
+                # Legacy mode
+                with progress_lock:
+                    CURRENT_ROW = i + 1
+                    PROGRESS = int((CURRENT_ROW / TOTAL_ROWS) * 100)
             
             lc = normalize_country(row["Kraj zaladunku"])
             lp = row["Kod zaladunku"]
@@ -3425,9 +3468,15 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
             }
 
             # Dodawanie do podglądu niezależnie od tego czy był błąd czy nie
-            PREVIEW_DATA['rows'].append(preview_row)
-            if len(PREVIEW_DATA['rows']) > 1000:
-                PREVIEW_DATA['rows'].pop(0)
+            if user_data:
+                user_data.preview_data['rows'].append(preview_row)
+                if len(user_data.preview_data['rows']) > 1000:
+                    user_data.preview_data['rows'].pop(0)
+            else:
+                # Legacy mode
+                PREVIEW_DATA['rows'].append(preview_row)
+                if len(PREVIEW_DATA['rows']) > 1000:
+                    PREVIEW_DATA['rows'].pop(0)
 
             # Przygotuj wyniki z dodanymi kolumnami regionalnymi
             result_dict = {
@@ -3506,10 +3555,9 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
 
             results.append(result_dict)
 
-            # Aktualizuj postęp po każdym wierszu
-            PROGRESS = int((i + 1) / TOTAL_ROWS * 100)
         except Exception as e:
-            print(f"\n❌ BŁĄD w wierszu {CURRENT_ROW}: {str(e)}")
+            current_row_num = user_data.current_row if user_data else (CURRENT_ROW if 'CURRENT_ROW' in globals() else i+1)
+            print(f"\n❌ BŁĄD w wierszu {current_row_num}: {str(e)}")
             print(f"Szczegóły wiersza: {dict(row)}")
             print("Traceback:")
             import traceback
@@ -3557,14 +3605,24 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
             }
             
             # Dodawanie do podglądu niezależnie od tego czy był błąd czy nie
-            PREVIEW_DATA['rows'].append(preview_row)
-            if len(PREVIEW_DATA['rows']) > 1000:
-                PREVIEW_DATA['rows'].pop(0)
+            if user_data:
+                user_data.preview_data['rows'].append(preview_row)
+                if len(user_data.preview_data['rows']) > 1000:
+                    user_data.preview_data['rows'].pop(0)
+            else:
+                # Legacy mode
+                PREVIEW_DATA['rows'].append(preview_row)
+                if len(PREVIEW_DATA['rows']) > 1000:
+                    PREVIEW_DATA['rows'].pop(0)
 
         finally:
             pass
 
-    print(f"\nPrzetworzono {CURRENT_ROW} z {TOTAL_ROWS} wierszy")
+    # Log końcowy przetwarzania
+    if user_data:
+        logger.info(f"[{session_id_short}] Przetworzono {user_data.current_row} z {user_data.total_rows} wierszy")
+    else:
+        print(f"\nPrzetworzono {CURRENT_ROW} z {TOTAL_ROWS} wierszy")
     
     print("\nGenerowanie pliku Excel...")
     try:
@@ -3725,18 +3783,29 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
         excel_buffer.seek(0)
         excel_data = excel_buffer.getvalue()
         
-        # Aktualizuj zmienną globalną w bezpieczny sposób
-        with progress_lock:
-            print(f"[process_przetargi] Ustawiam RESULT_EXCEL, rozmiar danych: {len(excel_data)} bajtów")
-            RESULT_EXCEL = excel_data
+        # Aktualizuj dane sesji lub zmienną globalną
+        if user_data:
+            logger.info(f"[{session_id_short}] Zapisuję wynik, rozmiar: {len(excel_data)} bajtów")
+            user_data.result_excel = io.BytesIO(excel_data)
+        else:
+            # Legacy mode
+            with progress_lock:
+                print(f"[process_przetargi] Ustawiam RESULT_EXCEL, rozmiar danych: {len(excel_data)} bajtów")
+                RESULT_EXCEL = excel_data
         
-        print("Plik Excel został wygenerowany pomyślnie.")
+        logger.info(f"[{session_id_short}] Plik Excel został wygenerowany pomyślnie")
+        
     except Exception as e:
-        print(f"Błąd podczas generowania pliku Excel: {e}")
-        with progress_lock:
-            print("[process_przetargi] Błąd, ustawiam RESULT_EXCEL=None")
-            RESULT_EXCEL = None
-            PROGRESS = -1
+        logger.error(f"[{session_id_short}] Błąd podczas generowania pliku Excel: {e}", exc_info=True)
+        if user_data:
+            user_data.result_excel = None
+            user_data.progress = -1
+        else:
+            # Legacy mode
+            with progress_lock:
+                print("[process_przetargi] Błąd, ustawiam RESULT_EXCEL=None")
+                RESULT_EXCEL = None
+                PROGRESS = -1
 
     return results
 
@@ -3787,7 +3856,15 @@ def clear_luxembourg_cache():
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max-limit
-app.config['SECRET_KEY'] = 'your-secret-key-123'  # Klucz do szyfrowania sesji
+
+# Konfiguracja sesji Flask dla wielu użytkowników
+# W produkcji SECRET_KEY powinien pochodzić ze zmiennych środowiskowych
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', secrets.token_hex(32))
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
+app.config['SESSION_COOKIE_SECURE'] = False  # Ustaw True w produkcji z HTTPS
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_REFRESH_EACH_REQUEST'] = True
 
 # Konfiguracja logowania
 logging.basicConfig(
@@ -3805,15 +3882,54 @@ class FilterProgress(logging.Filter):
         return not record.getMessage().startswith("Progress:")
 
 
-# Zmienne globalne dla postępu przetwarzania
-PROGRESS = 0
-CURRENT_ROW = 0
-TOTAL_ROWS = 0
-PREVIEW_DATA = {'rows': [], 'total_count': 0}
-GEOCODING_CURRENT = 0
-GEOCODING_TOTAL = 0
-PROCESSING_COMPLETE = False
-RESULT_EXCEL = None
+# === DUPLIKACJA ZMIENNYCH GLOBALNYCH USUNIĘTA ===
+# Wszystkie dane sesji znajdują się teraz w SessionManager
+# === KONIEC ===
+
+
+# ============================================================================
+# FUNKCJE POMOCNICZE DO ZARZĄDZANIA SESJAMI UŻYTKOWNIKÓW
+# ============================================================================
+
+def get_or_create_session_id() -> str:
+    """
+    Pobiera lub tworzy unikalny identyfikator sesji dla użytkownika.
+    Używa Flask session do przechowania session_id.
+    
+    Returns:
+        Unikalny identyfikator sesji
+    """
+    if 'session_id' not in session:
+        session['session_id'] = session_manager.generate_session_id()
+        session.permanent = True  # Sesja przetrwa zamknięcie przeglądarki
+        logger.info(f"Utworzono nową sesję użytkownika: {session['session_id'][:8]}...")
+    return session['session_id']
+
+
+def get_user_session() -> UserSessionData:
+    """
+    Pobiera dane sesji dla aktualnego użytkownika.
+    
+    Returns:
+        Obiekt UserSessionData dla aktualnego użytkownika
+    """
+    session_id = get_or_create_session_id()
+    return session_manager.get_session(session_id)
+
+
+# Inicjalizacja i uruchomienie schedulera czyszczenia sesji
+cleanup_scheduler = SessionCleanupScheduler(session_manager, interval_hours=1)
+cleanup_scheduler.start()
+
+# Zatrzymaj scheduler przy zamykaniu aplikacji
+atexit.register(lambda: cleanup_scheduler.stop())
+
+logger.info("System zarządzania sesjami zainicjalizowany pomyślnie")
+
+
+# ============================================================================
+# ENDPOINTY FLASK
+# ============================================================================
 
 @app.route("/show_cache")
 def show_cache():
@@ -3835,42 +3951,58 @@ def show_cache():
 
 @app.route("/", methods=["GET", "POST"])
 def upload_file():
+    """
+    Endpoint do uploadu pliku Excel i rozpoczęcia przetwarzania.
+    Każdy użytkownik ma swoją izolowaną sesję.
+    """
     if request.method == "POST":
+        logger.info("="*80)
+        logger.info("POST / - Otrzymano request uploadu pliku")
+        logger.info(f"Request files: {list(request.files.keys())}")
+        logger.info(f"Request form: {dict(request.form)}")
+        logger.info("="*80)
+        
         try:
             file = request.files.get("file")
             if not file:
+                logger.error("Brak pliku w requeście!")
                 return render_template("error.html", message="Nie wybrano pliku")
 
-            # Reset zmiennych globalnych
-            with progress_lock:
-                global PROGRESS, CURRENT_ROW, TOTAL_ROWS, GEOCODING_CURRENT, GEOCODING_TOTAL, PREVIEW_DATA, RESULT_EXCEL, PROCESSING_COMPLETE
-                PROGRESS = 0
-                CURRENT_ROW = 0
-                TOTAL_ROWS = 0
-                GEOCODING_CURRENT = 0
-                GEOCODING_TOTAL = 0
-                PREVIEW_DATA = {'rows': [], 'total_count': 0}
-                RESULT_EXCEL = None
-                PROCESSING_COMPLETE = False
-
-            # Pobierz parametry
-            fuel_cost = float(request.form.get("fuel_cost", DEFAULT_FUEL_COST))
-            driver_cost = float(request.form.get("driver_cost", DEFAULT_DRIVER_COST))
-            matrix_type = request.form.get("matrix_type", "klient")
+            # Pobierz lub utwórz sesję użytkownika
+            user_data = get_user_session()
+            
+            # Reset danych użytkownika dla nowego przetwarzania
+            user_data.reset_progress()
+            
+            # Pobierz parametry z formularza
+            user_data.fuel_cost = float(request.form.get("fuel_cost", DEFAULT_FUEL_COST))
+            user_data.driver_cost = float(request.form.get("driver_cost", DEFAULT_DRIVER_COST))
+            user_data.matrix_type = request.form.get("matrix_type", "klient")
 
             # Ustaw odpowiednią macierz marży
-            set_margin_matrix(matrix_type)
+            set_margin_matrix(user_data.matrix_type)
 
             # Czytaj plik w kontekście żądania
-            file_bytes = file.read()
+            user_data.file_bytes = file.read()
+            
+            logger.info(f"[{user_data.session_id[:8]}] Rozpoczynam przetwarzanie (fuel={user_data.fuel_cost}, driver={user_data.driver_cost}, matrix={user_data.matrix_type})")
 
-            # Uruchom przetwarzanie w tle z bajtami pliku
-            thread = threading.Thread(target=background_processing, args=(file_bytes, fuel_cost, driver_cost))
+            # Uruchom przetwarzanie w tle z session_id
+            thread = threading.Thread(
+                target=background_processing,
+                args=(user_data.session_id,),
+                daemon=True,
+                name=f"BgProcess-{user_data.session_id[:8]}"
+            )
             thread.start()
+            user_data.thread = thread
             
             return render_template("processing.html")
+            
         except Exception as e:
+            logger.error(f"Błąd podczas uploadu pliku: {e}", exc_info=True)
             return render_template("error.html", message=str(e))
+            
     return render_template("upload.html", 
                          default_fuel_cost=DEFAULT_FUEL_COST,
                          default_driver_cost=DEFAULT_DRIVER_COST)
@@ -3878,55 +4010,130 @@ def upload_file():
 
 @app.route("/download")
 def download():
-    global PROCESSING_COMPLETE, RESULT_EXCEL
-    with progress_lock:
-        print(f"[/download] PROCESSING_COMPLETE={PROCESSING_COMPLETE}, RESULT_EXCEL={'jest' if RESULT_EXCEL else 'brak'}")
-        if not PROCESSING_COMPLETE:
-            print("[/download] Zwracam: Jeszcze nie gotowe")
-            return "Jeszcze nie gotowe."
-        if not RESULT_EXCEL:
-            print("[/download] Zwracam: Brak wygenerowanego pliku")
-            return "Brak wygenerowanego pliku."
-        if len(RESULT_EXCEL) <= 100:
-            print("[/download] Zwracam: Plik Excel jest nieprawidłowy")
-            return "Plik Excel jest nieprawidłowy."
-        try:
-            print("[/download] Wysyłam plik Excel")
-            return send_file(io.BytesIO(RESULT_EXCEL), download_name="wycena.xlsx", as_attachment=True)
-        except Exception as e:
-            print(f"[/download] Błąd podczas wysyłania pliku: {e}")
-            return "Błąd podczas pobierania pliku."
+    """
+    Endpoint do pobierania wyników przetwarzania.
+    Każdy użytkownik pobiera tylko swoje wyniki.
+    """
+    try:
+        user_data = get_user_session()
+        session_id_short = user_data.session_id[:8]
+        
+        logger.info(
+            f"[{session_id_short}] /download - "
+            f"complete={user_data.processing_complete}, "
+            f"has_result={user_data.result_excel is not None}"
+        )
+        
+        if not user_data.processing_complete:
+            logger.warning(f"[{session_id_short}] Próba pobrania - przetwarzanie w toku")
+            return "Przetwarzanie jeszcze nie zostało zakończone.", 400
+        
+        if user_data.result_excel is None:
+            logger.warning(f"[{session_id_short}] Próba pobrania - brak wyników")
+            return "Brak wyników do pobrania.", 404
+        
+        # Sprawdź czy plik nie jest pusty
+        user_data.result_excel.seek(0, 2)  # Przejdź na koniec
+        file_size = user_data.result_excel.tell()
+        user_data.result_excel.seek(0)  # Wróć na początek
+        
+        if file_size <= 100:
+            logger.error(f"[{session_id_short}] Plik wynikowy jest zbyt mały: {file_size} bajtów")
+            return "Plik Excel jest nieprawidłowy.", 500
+        
+        logger.info(f"[{session_id_short}] Wysyłam plik wynikowy ({file_size} bajtów)")
+        
+        return send_file(
+            user_data.result_excel,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=f'zlecenia_{session_id_short}.xlsx'
+        )
+        
+    except Exception as e:
+        logger.error(f"Błąd podczas pobierania pliku: {e}", exc_info=True)
+        return "Błąd podczas pobierania pliku.", 500
 
 
 @app.route("/progress")
 def progress():
-    global PROGRESS, CURRENT_ROW, TOTAL_ROWS, PREVIEW_DATA, GEOCODING_CURRENT, GEOCODING_TOTAL, PROCESSING_COMPLETE
-    with progress_lock:
-        # Tworzymy statyczną zmienną dla funkcji progress, aby pamiętać ostatni stan
-        if not hasattr(progress, 'last_state'):
-            progress.last_state = {'progress': -1, 'current': -1, 'total': -1, 'complete': False}
+    """
+    Endpoint zwracający postęp przetwarzania dla aktualnego użytkownika.
+    Każdy użytkownik widzi tylko swój postęp.
+    """
+    try:
+        user_data = get_user_session()
+        
+        geocoding_progress = 0
+        if user_data.geocoding_total > 0:
+            geocoding_progress = min(
+                int((user_data.geocoding_current / user_data.geocoding_total) * 100),
+                100
+            )
+        
+        # Dodaj informację o używanej macierzy
+        matrix_name, matrix_file = get_margin_matrix_info()
+        
+        response_data = {
+            'progress': user_data.progress,
+            'current': user_data.current_row,
+            'total': user_data.total_rows,
+            'geocoding_progress': geocoding_progress,
+            'error': user_data.progress == -1 or user_data.progress == -2,
+            'preview_data': user_data.preview_data,
+            'processing_complete': user_data.processing_complete,
+            'matrix_name': matrix_name,
+            'matrix_file': matrix_file,
+            'session_id': user_data.session_id[:8]  # Dla debugowania
+        }
+        return jsonify(response_data)
+        
+    except Exception as e:
+        logger.error(f"Błąd w /progress: {e}", exc_info=True)
+        return jsonify({
+            'error': str(e),
+            'progress': -1,
+            'processing_complete': False
+        }), 500
 
-    geocoding_progress = 0
-    if GEOCODING_TOTAL > 0:
-        geocoding_progress = min(int((GEOCODING_CURRENT / GEOCODING_TOTAL) * 100), 100)  # Upewnij się, że nie przekracza 100%
-    
-    # Usunięto wyświetlanie postępu w konsoli
-    
-    # Dodaj informację o używanej macierzy
-    matrix_name, matrix_file = get_margin_matrix_info()
-    
-    response_data = {
-        'progress': PROGRESS,
-        'current': CURRENT_ROW,
-        'total': TOTAL_ROWS,
-        'geocoding_progress': geocoding_progress,
-        'error': PROGRESS == -1 or PROGRESS == -2,
-        'preview_data': PREVIEW_DATA,
-        'processing_complete': PROCESSING_COMPLETE,
-        'matrix_name': matrix_name,
-        'matrix_file': matrix_file
-    }
-    return jsonify(response_data)
+
+@app.route("/admin/sessions")
+def admin_sessions():
+    """
+    Endpoint administracyjny do monitorowania aktywnych sesji.
+    Pokazuje statystyki i listę wszystkich aktywnych sesji użytkowników.
+    """
+    try:
+        stats = session_manager.get_session_statistics()
+        sessions_info = session_manager.get_all_sessions_info()
+        
+        return jsonify({
+            'statistics': stats,
+            'active_sessions': sessions_info,
+            'timestamp': time.time()
+        })
+    except Exception as e:
+        logger.error(f"Błąd w /admin/sessions: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route("/admin/cleanup_sessions")
+def admin_cleanup_sessions():
+    """
+    Endpoint administracyjny do wymuszenia natychmiastowego czyszczenia sesji.
+    """
+    try:
+        deleted_count = cleanup_scheduler.cleanup_now()
+        stats = session_manager.get_session_statistics()
+        
+        return jsonify({
+            'deleted_sessions': deleted_count,
+            'remaining_sessions': stats['total_sessions'],
+            'message': f'Usunięto {deleted_count} wygasłych sesji'
+        })
+    except Exception as e:
+        logger.error(f"Błąd w /admin/cleanup_sessions: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route("/save_cache")
@@ -4429,60 +4636,61 @@ def test_truck_route_map():
         route_logger.error(f"Błąd podczas generowania linku do mapy: {str(e)}")
         return f"Błąd: {str(e)}", 500
 
-def background_processing(file_bytes, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVER_COST):
-    global PROGRESS, PROCESSING_COMPLETE, RESULT_EXCEL, CURRENT_ROW, TOTAL_ROWS, PREVIEW_DATA, GEOCODING_CURRENT, GEOCODING_TOTAL
+def background_processing(session_id: str):
+    """
+    Przetwarza plik Excel w tle dla danej sesji użytkownika.
     
-    # Resetuj wszystkie zmienne globalne na początku
-    with progress_lock:
-        print("[background_processing] Resetuję zmienne globalne")
-        PROGRESS = 0
-        PROCESSING_COMPLETE = False
-        RESULT_EXCEL = None
-        CURRENT_ROW = 0
-        TOTAL_ROWS = 0
-        PREVIEW_DATA = {'rows': [], 'total_count': 0}
-        GEOCODING_CURRENT = 0
-        GEOCODING_TOTAL = 0
+    Args:
+        session_id: Unikalny identyfikator sesji użytkownika
+    """
+    user_data = session_manager.get_session(session_id, create_if_missing=False)
+    
+    if user_data is None:
+        print(f"[{session_id[:8]}] BŁĄD: Nie znaleziono sesji użytkownika!")
+        logger.error(f"[{session_id[:8]}] Nie znaleziono sesji użytkownika!")
+        return
+    
+    session_id_short = session_id[:8]
     
     try:
-        print("Rozpoczynam przetwarzanie pliku...")
-        # Użyj bezpośrednio bajtów pliku
-        file_stream = io.BytesIO(file_bytes)
+        logger.info(f"[{session_id_short}] Rozpoczynam przetwarzanie pliku...")
+        
+        # Użyj bezpośrednio bajtów pliku z sesji użytkownika
+        file_stream = io.BytesIO(user_data.file_bytes)
         df = pd.read_excel(file_stream, dtype=str)
         df.columns = df.columns.str.lower().str.replace(" ", "_").str.strip()
-        print("Przekształcone kolumny:", list(df.columns))
+        logger.info(f"[{session_id_short}] Przekształcone kolumny: {list(df.columns)}")
         
         try:
-            process_przetargi(df, fuel_cost, driver_cost)
+            # Wywołaj process_przetargi z session_id
+            process_przetargi(df, user_data.fuel_cost, user_data.driver_cost, session_id)
             save_caches()
-            print("Przetwarzanie zakończone.")
-            with progress_lock:
-                print("[background_processing] Ustawiam PROCESSING_COMPLETE=True i PROGRESS=100")
-                PROCESSING_COMPLETE = True
-                if PROGRESS != -1 and PROGRESS != -2:  # Nie zmieniaj PROGRESS jeśli wystąpił błąd
-                    PROGRESS = 100
+            
+            logger.info(f"[{session_id_short}] Przetwarzanie zakończone pomyślnie")
+            user_data.processing_complete = True
+            if user_data.progress not in [-1, -2]:  # Nie zmieniaj progress jeśli wystąpił błąd
+                user_data.progress = 100
         
         except GeocodeException as ge:
-            with progress_lock:
-                print("[background_processing] GeocodeException: Ustawiam PROGRESS=-2 i PROCESSING_COMPLETE=True")
-                PROGRESS = -2
-                PROCESSING_COMPLETE = True
-            print(f"Znaleziono {len(ge.ungeocoded_locations)} nierozpoznanych lokalizacji")
+            logger.warning(
+                f"[{session_id_short}] GeocodeException: "
+                f"Znaleziono {len(ge.ungeocoded_locations)} nierozpoznanych lokalizacji"
+            )
+            user_data.progress = -2
+            user_data.processing_complete = True
+            user_data.locations_to_verify = ge.ungeocoded_locations
         
         except Exception as e:
-            print(f"Błąd w process_przetargi: {e}")
-            with progress_lock:
-                print("[background_processing] Błąd: Ustawiam PROGRESS=-1, PROCESSING_COMPLETE=True i RESULT_EXCEL=None")
-                PROGRESS = -1
-                PROCESSING_COMPLETE = True
-                RESULT_EXCEL = None
+            logger.error(f"[{session_id_short}] Błąd w process_przetargi: {e}", exc_info=True)
+            user_data.progress = -1
+            user_data.processing_complete = True
+            user_data.result_excel = None
+            
     except Exception as e:
-        print(f"Błąd przetwarzania: {e}")
-        with progress_lock:
-            print("[background_processing] Błąd: Ustawiam PROGRESS=-1, PROCESSING_COMPLETE=True i RESULT_EXCEL=None")
-            PROGRESS = -1
-            PROCESSING_COMPLETE = True
-            RESULT_EXCEL = None
+        logger.error(f"[{session_id_short}] Krytyczny błąd przetwarzania: {e}", exc_info=True)
+        user_data.progress = -1
+        user_data.processing_complete = True
+        user_data.result_excel = None
 
 @app.route("/check_locations", methods=["POST"])
 def check_locations():
@@ -4713,4 +4921,5 @@ if __name__ == '__main__':
 
 
     log.addFilter(FilterProgress())
-    app.run(debug=True, host='0.0.0.0')
+    # Wyłączamy debug mode aby uniknąć auto-reload który przerywa przetwarzanie w tle
+    app.run(debug=False, host='0.0.0.0')
