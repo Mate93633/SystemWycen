@@ -3539,21 +3539,30 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                 'total_count': TOTAL_ROWS
             }
 
-        # Przypisanie nazw kolumn - oczekujemy 7 kolumn (6 standardowych + transit time)
-    expected_columns = ['Kraj zaladunku', 'Kod zaladunku', 'Miasto zaladunku',
-                       'Kraj rozladunku', 'Kod rozładunku', 'Miasto rozładunku', 'transit time']
+    # Przypisanie nazw kolumn - obsługa różnych formatów
+    # Format 1: 6 kolumn (stary) - bez transit time
+    # Format 2: 7 kolumn - z transit time
+    # Format 3: 8 kolumn - z Punkty_posrednie i transit time
     
-    if len(df.columns) >= 7:
-        # Przypisz nazwy do pierwszych 7 kolumn
-        df.columns = expected_columns[:len(df.columns)]
-        print(f"Przypisano nazwy do {len(df.columns)} kolumn, w tym kolumna 'transit time'")
+    expected_columns_base = ['Kraj zaladunku', 'Kod zaladunku', 'Miasto zaladunku',
+                             'Kraj rozladunku', 'Kod rozładunku', 'Miasto rozładunku']
+    
+    if len(df.columns) == 8:
+        # Nowy format z waypointami: 6 podstawowych + Punkty_posrednie + transit time
+        df.columns = expected_columns_base + ['Punkty_posrednie', 'transit time']
+        print(f"Nowy format pliku - {len(df.columns)} kolumn z 'Punkty_posrednie' i 'transit time'")
+    elif len(df.columns) == 7:
+        # Sprawdź czy to stary format (7 kolumn z transit time) czy nowy (6 + Punkty_posrednie)
+        # Dla kompatybilności zakładamy format z transit time
+        df.columns = expected_columns_base + ['transit time']
+        print(f"Standardowy format pliku - {len(df.columns)} kolumn z 'transit time'")
     elif len(df.columns) == 6:
         # Stary format - tylko 6 kolumn bez transit time
-        df.columns = expected_columns[:6]
+        df.columns = expected_columns_base
         print(f"Stary format pliku - {len(df.columns)} kolumn bez 'transit time'")
     else:
         print(f"UWAGA: Nieoczekiwana liczba kolumn: {len(df.columns)}")
-        df.columns = expected_columns[:len(df.columns)]
+        df.columns = expected_columns_base[:len(df.columns)]
     
     print(f"Nazwy kolumn: {list(df.columns)}")
 
