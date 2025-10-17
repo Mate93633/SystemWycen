@@ -35,6 +35,8 @@ import hashlib
 import secrets
 import atexit
 from datetime import timedelta
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
 
 # Import nowych modułów do zarządzania sesjami
 from session_manager import SessionManager, SessionCleanupScheduler
@@ -93,6 +95,106 @@ logger = logging.getLogger(__name__)
 
 # Wyłączenie debugowych logów urllib3
 logging.getLogger('urllib3').setLevel(logging.ERROR)
+
+
+# ============================================================================
+# DATACLASSES - Modele danych dla tras z punktami pośrednimi
+# ============================================================================
+
+@dataclass
+class WaypointData:
+    """
+    Reprezentacja pojedynczego punktu na trasie.
+    
+    Attributes:
+        country: Kod kraju (ISO 2-letter, np. 'PL')
+        postal_code: Kod pocztowy
+        city: Nazwa miasta (opcjonalne)
+        coordinates: Współrzędne (lat, lon) po geokodowaniu
+    """
+    country: str
+    postal_code: str
+    city: Optional[str] = None
+    coordinates: Optional[Tuple[float, float]] = None
+    
+    def __post_init__(self):
+        """Normalizacja danych wejściowych"""
+        if self.country:
+            self.country = self.country.upper().strip()
+        if self.postal_code:
+            self.postal_code = self.postal_code.strip()
+        if self.city:
+            self.city = self.city.strip()
+    
+    def is_geocoded(self) -> bool:
+        """Sprawdza czy punkt ma przypisane współrzędne"""
+        return self.coordinates is not None and len(self.coordinates) == 2
+    
+    def __str__(self) -> str:
+        """String representation dla logowania"""
+        city_str = f" ({self.city})" if self.city else ""
+        return f"{self.country} {self.postal_code}{city_str}"
+
+
+@dataclass
+class RouteRequest:
+    """
+    Żądanie obliczenia trasy z punktami pośrednimi.
+    
+    Attributes:
+        start: Punkt startowy
+        end: Punkt końcowy
+        waypoints: Lista punktów pośrednich (0-5)
+        fuel_cost: Koszt paliwa [EUR/km]
+        driver_cost: Koszt kierowcy [EUR/dzień]
+        matrix_type: Typ matrycy marży ('klient' lub 'targi')
+        avoid_switzerland: Czy unikać Szwajcarii
+        routing_mode: Tryb routingu ('FAST', 'ECO', 'SHORT')
+    """
+    start: WaypointData
+    end: WaypointData
+    waypoints: List[WaypointData] = field(default_factory=list)
+    fuel_cost: float = DEFAULT_FUEL_COST
+    driver_cost: float = DEFAULT_DRIVER_COST
+    matrix_type: str = "klient"
+    avoid_switzerland: bool = True
+    routing_mode: str = DEFAULT_ROUTING_MODE
+    
+    def __post_init__(self):
+        """Walidacja danych"""
+        if len(self.waypoints) > 5:
+            raise ValueError("Maksymalnie 5 punktów pośrednich dozwolone")
+        
+        if self.fuel_cost < 0 or self.fuel_cost > 5:
+            raise ValueError("Koszt paliwa musi być w zakresie 0-5 EUR/km")
+        
+        if self.driver_cost < 0 or self.driver_cost > 1000:
+            raise ValueError("Koszt kierowcy musi być w zakresie 0-1000 EUR/dzień")
+        
+        if self.matrix_type not in ['klient', 'targi']:
+            raise ValueError("matrix_type musi być 'klient' lub 'targi'")
+    
+    def get_all_points_ordered(self) -> List[WaypointData]:
+        """Zwraca wszystkie punkty w kolejności: start → waypoints → end"""
+        return [self.start] + self.waypoints + [self.end]
+    
+    def total_waypoints_count(self) -> int:
+        """Liczba wszystkich punktów włączając start i end"""
+        return 2 + len(self.waypoints)
+    
+    def has_waypoints(self) -> bool:
+        """Czy trasa zawiera punkty pośrednie"""
+        return len(self.waypoints) > 0
+    
+    def __str__(self) -> str:
+        """String representation dla logowania"""
+        points_str = " → ".join(str(p) for p in self.get_all_points_ordered())
+        return f"Route[{self.total_waypoints_count()} points]: {points_str}"
+
+
+# ============================================================================
+# FLASK & LOGGING CONFIGURATION
+# ============================================================================
 
 # Filtr dla logów postępu
 class FilterProgress(logging.Filter):
@@ -1289,6 +1391,150 @@ def ptv_geocode_by_text(search_text, api_key, language="pl", country_code=None):
     except Exception as e:
         logger.error(f"PTV API wyjątek: {str(e)} dla zapytania '{search_text}'")
         return (None, None, 'nieznane', str(e))
+
+
+# ============================================================================
+# FUNKCJE POMOCNICZE - Obsługa tras z punktami pośrednimi
+# ============================================================================
+
+def calculate_multi_waypoint_route(route_request: RouteRequest):
+    """
+    Oblicza trasę z punktami pośrednimi.
+    
+    Args:
+        route_request: Obiekt RouteRequest z wszystkimi danymi trasy
+    
+    Returns:
+        Dict z wynikami:
+        {
+            'success': bool,
+            'distance': float (km),
+            'legs': List[Dict],
+            'segments_info': List[str],  # Opisy segmentów
+            'toll_cost': float,
+            'road_toll': float,
+            'other_toll': float,
+            'polyline': str,
+            'toll_details': Dict,
+            'special_systems': List,
+            'error_message': str (jeśli success=False),
+            'failed_points': List[WaypointData] (jeśli success=False)
+        }
+    """
+    logger.info(f"Rozpoczynam obliczanie trasy z waypoints: {route_request}")
+    
+    # KROK 1: Geokodowanie wszystkich punktów
+    all_points = route_request.get_all_points_ordered()
+    geocoded_coords = []
+    failed_points = []
+    
+    for i, point in enumerate(all_points):
+        coords = get_coordinates(point.country, point.postal_code, point.city)
+        
+        if coords and len(coords) >= 2 and None not in coords[:2]:
+            point.coordinates = (coords[0], coords[1])
+            geocoded_coords.append((coords[0], coords[1]))
+            logger.debug(f"Punkt {i+1}/{len(all_points)} OK: {point}")
+        else:
+            failed_points.append(point)
+            logger.warning(f"Punkt {i+1}/{len(all_points)} FAILED: {point}")
+    
+    if failed_points:
+        failed_str = ", ".join(str(p) for p in failed_points)
+        error_msg = (
+            f"Nie można geokodować {len(failed_points)} punkt(ów): {failed_str}. "
+            f"Sprawdź poprawność kodów pocztowych i nazw miast."
+        )
+        logger.error(error_msg)
+        return {
+            'success': False,
+            'error_message': error_msg,
+            'failed_points': failed_points
+        }
+    
+    logger.info(f"Geokodowanie zakończone sukcesem: {len(geocoded_coords)} punktów")
+    
+    # KROK 2: Wywołanie PTV API z wieloma waypoints
+    ptv_result = ptv_manager.get_route_with_waypoints(
+        waypoints=geocoded_coords,
+        avoid_switzerland=route_request.avoid_switzerland,
+        routing_mode=route_request.routing_mode
+    )
+    
+    if not ptv_result:
+        error_msg = "PTV API nie zwróciło wyników dla trasy"
+        logger.error(error_msg)
+        return {
+            'success': False,
+            'error_message': error_msg
+        }
+    
+    # KROK 3: Analiza segmentów
+    segments_info = []
+    legs = ptv_result.get('legs', [])
+    
+    for i, leg in enumerate(legs):
+        if i + 1 < len(all_points):
+            from_point = all_points[i]
+            to_point = all_points[i + 1]
+            distance = leg.get('distance', 0) / 1000  # m → km
+            duration = leg.get('duration', 0) / 3600  # s → h
+            
+            segment_desc = (
+                f"Segment {i+1}: {from_point} → {to_point} "
+                f"({distance:.1f}km, {duration:.1f}h)"
+            )
+            segments_info.append(segment_desc)
+            logger.debug(segment_desc)
+    
+    # KROK 4: Zwróć wyniki
+    result = {
+        'success': True,
+        'distance': ptv_result.get('distance', 0.0),
+        'legs': legs,
+        'segments_info': segments_info,
+        'toll_cost': ptv_result.get('toll_cost', 0.0),
+        'road_toll': ptv_result.get('road_toll', 0.0),
+        'other_toll': ptv_result.get('other_toll', 0.0),
+        'polyline': ptv_result.get('polyline', ''),
+        'toll_details': ptv_result.get('toll_details', {}),
+        'special_systems': ptv_result.get('special_systems', [])
+    }
+    
+    logger.info(
+        f"Trasa obliczona pomyślnie: {result['distance']:.1f}km, "
+        f"{len(segments_info)} segmentów, {result['toll_cost']:.2f}€ opłat"
+    )
+    
+    return result
+
+
+def parse_waypoints_from_form(form_data):
+    """
+    Parsuje punkty pośrednie z danych formularza Flask.
+    
+    Args:
+        form_data: request.form z Flask
+    
+    Returns:
+        List[WaypointData] - lista punktów pośrednich (może być pusta)
+    """
+    waypoints = []
+    
+    for i in range(1, 6):  # max 5 waypoints
+        wp_country = form_data.get(f'waypoint_{i}_country', '').strip().upper()
+        wp_postal = form_data.get(f'waypoint_{i}_postal', '').strip()
+        wp_city = form_data.get(f'waypoint_{i}_city', '').strip() or None
+        
+        if wp_country and wp_postal:
+            waypoints.append(WaypointData(
+                country=wp_country,
+                postal_code=wp_postal,
+                city=wp_city
+            ))
+    
+    return waypoints
+
 
 def get_coordinates(country, postal_code, city=None):
     global GEOCODING_CURRENT, GEOCODING_TOTAL
@@ -4273,8 +4519,12 @@ def test_route_form():
     if request.method == 'POST':
         load_country = request.form.get('load_country', '').strip().upper()
         load_postal = request.form.get('load_postal', '').strip()
+        load_city = request.form.get('load_city', '').strip() or None
+        
         unload_country = request.form.get('unload_country', '').strip().upper()
         unload_postal = request.form.get('unload_postal', '').strip()
+        unload_city = request.form.get('unload_city', '').strip() or None
+        
         matrix_type = request.form.get('matrix_type', 'klient')
         
         # Pobierz opcjonalny transit time
@@ -4308,33 +4558,101 @@ def test_route_form():
 
         # Ustaw odpowiednią macierz marży
         set_margin_matrix(matrix_type)
-
-        try:
-            # Pobierz współrzędne dla punktu załadunku
-            load_coords = get_coordinates(load_country, load_postal)
-            if not load_coords:
-                return render_template("error.html", message=f"Nie można znaleźć współrzędnych dla: {load_country} {load_postal}")
+        
+        # ========== NOWE: Parsowanie punktów pośrednich ==========
+        waypoints = parse_waypoints_from_form(request.form)
+        
+        # Decyzja: czy używać nowego flow z waypoints?
+        if waypoints:
+            logger.info(f"Wykryto {len(waypoints)} punktów pośrednich - używam nowego flow")
             
-            # Pobierz współrzędne dla punktu rozładunku
-            unload_coords = get_coordinates(unload_country, unload_postal)
-            if not unload_coords:
-                return render_template("error.html", message=f"Nie można znaleźć współrzędnych dla: {unload_country} {unload_postal}")
+            try:
+                # Budowanie żądania trasy
+                route_req = RouteRequest(
+                    start=WaypointData(load_country, load_postal, load_city),
+                    end=WaypointData(unload_country, unload_postal, unload_city),
+                    waypoints=waypoints,
+                    fuel_cost=fuel_cost,
+                    driver_cost=driver_cost,
+                    matrix_type=matrix_type
+                )
+                
+                # Oblicz trasę z waypoints
+                result = calculate_multi_waypoint_route(route_req)
+                
+                if not result['success']:
+                    error_msg = result.get('error_message', 'Unknown error')
+                    return render_template("error.html", message=error_msg)
+                
+                # Dodatkowe obliczenia (koszt paliwa, kierowcy, marża)
+                fuel_cost_total = result['distance'] * fuel_cost
+                
+                # Transit time
+                if transit_time is not None:
+                    driver_days = transit_time
+                else:
+                    driver_days = calculate_driver_days(result['distance'])
+                
+                driver_cost_total = driver_days * driver_cost if driver_days else 0
+                
+                # Podlot (tylko dla pierwszego segmentu)
+                podlot_cost = calculate_podlot(load_country, load_postal)
+                
+                total_cost = (
+                    fuel_cost_total + 
+                    result['toll_cost'] + 
+                    driver_cost_total + 
+                    podlot_cost
+                )
+                
+                # Renderuj specjalny template dla waypoints
+                return render_template(
+                    "test_route_form.html",  # użyjemy tego samego template z danymi
+                    waypoints_result=True,
+                    route_request=route_req,
+                    route_result=result,
+                    fuel_cost_total=fuel_cost_total,
+                    driver_cost_total=driver_cost_total,
+                    driver_days=driver_days,
+                    podlot_cost=podlot_cost,
+                    total_cost=total_cost,
+                    matrix_name=matrix_type.title()
+                )
+                
+            except ValueError as e:
+                return render_template("error.html", message=f"Błąd walidacji: {str(e)}")
+            except Exception as e:
+                logger.error(f"Błąd obliczania trasy z waypoints: {e}", exc_info=True)
+                return render_template("error.html", message=f"Nieoczekiwany błąd: {str(e)}")
+        
+        else:
+            # ========== STARY FLOW: bez waypoints (backward compatibility) ==========
+            try:
+                # Pobierz współrzędne dla punktu załadunku
+                load_coords = get_coordinates(load_country, load_postal, load_city)
+                if not load_coords:
+                    return render_template("error.html", message=f"Nie można znaleźć współrzędnych dla: {load_country} {load_postal}")
+                
+                # Pobierz współrzędne dla punktu rozładunku
+                unload_coords = get_coordinates(unload_country, unload_postal, unload_city)
+                if not unload_coords:
+                    return render_template("error.html", message=f"Nie można znaleźć współrzędnych dla: {unload_country} {unload_postal}")
 
-            # Oblicz trasę
-            load_coord_str = f"{load_coords[0]},{load_coords[1]}"
-            unload_coord_str = f"{unload_coords[0]},{unload_coords[1]}"
-            
-            # Przekieruj do wyników z parametrami
-            return redirect(url_for('test_route_result', 
-                                  load=[load_country, load_postal, load_coord_str],
-                                  unload=[unload_country, unload_postal, unload_coord_str],
-                                  matrix_type=matrix_type,
-                                  transit_time=transit_time,
-                                  fuel_cost=fuel_cost,
-                                  driver_cost=driver_cost))
+                # Oblicz trasę
+                load_coord_str = f"{load_coords[0]},{load_coords[1]}"
+                unload_coord_str = f"{unload_coords[0]},{unload_coords[1]}"
+                
+                # Przekieruj do wyników z parametrami
+                return redirect(url_for('test_route_result', 
+                                      load=[load_country, load_postal, load_coord_str],
+                                      unload=[unload_country, unload_postal, unload_coord_str],
+                                      matrix_type=matrix_type,
+                                      transit_time=transit_time,
+                                      fuel_cost=fuel_cost,
+                                      driver_cost=driver_cost))
 
-        except Exception as e:
-            return render_template("error.html", message=str(e))
+            except Exception as e:
+                return render_template("error.html", message=str(e))
 
     return render_template("test_route_form.html")
 
