@@ -4885,23 +4885,33 @@ def test_route_form():
                     podlot_cost
                 )
                 
-                # Renderuj dedykowany template dla wyników waypoints
-                return render_template(
-                    "test_route_waypoints_result.html",
-                    route_request=route_req,
-                    route_result=result,
-                    fuel_cost=fuel_cost,
-                    driver_cost=driver_cost,
-                    fuel_cost_total=fuel_cost_total,
-                    driver_cost_total=driver_cost_total,
-                    driver_days=driver_days,
-                    podlot_km=podlot_km,
-                    podlot_source=podlot_source,
-                    podlot_cost=podlot_cost,
-                    total_cost=total_cost,
-                    matrix_name=matrix_type.title(),
-                    transit_time=transit_time
-                )
+                # Serializuj waypoints do przekazania w URL
+                waypoints_serialized = []
+                for wp in waypoints:
+                    if wp.is_geocoded():
+                        # Format: lat,lon
+                        waypoints_serialized.append(f"{wp.coordinates[0]},{wp.coordinates[1]}")
+                    else:
+                        # Format: COUNTRY:POSTAL[:CITY]
+                        wp_str = f"{wp.country}:{wp.postal_code}"
+                        if wp.city:
+                            wp_str += f":{wp.city}"
+                        waypoints_serialized.append(wp_str)
+                
+                waypoints_param = ";".join(waypoints_serialized)
+                
+                # Przekieruj do test_route_result z parametrem waypoints
+                load_coord_str = f"{route_req.start.coordinates[0]},{route_req.start.coordinates[1]}"
+                unload_coord_str = f"{route_req.end.coordinates[0]},{route_req.end.coordinates[1]}"
+                
+                return redirect(url_for('test_route_result',
+                                      load=[load_country, load_postal, load_coord_str],
+                                      unload=[unload_country, unload_postal, unload_coord_str],
+                                      waypoints=waypoints_param,
+                                      matrix_type=matrix_type,
+                                      transit_time=transit_time,
+                                      fuel_cost=fuel_cost,
+                                      driver_cost=driver_cost))
                 
             except ValueError as e:
                 return render_template("error.html", message=f"Błąd walidacji: {str(e)}")
@@ -4970,9 +4980,15 @@ def test_route_result():
     except (ValueError, TypeError):
         driver_cost = DEFAULT_DRIVER_COST
     
+    # Sprawdź czy są waypoints
+    waypoints_param = request.args.get('waypoints', '')
+    has_waypoints = bool(waypoints_param and waypoints_param.strip())
+    
     return render_template("test_route_result.html", 
                          load=request.args.getlist('load'),
                          unload=request.args.getlist('unload'),
+                         waypoints=waypoints_param,
+                         has_waypoints=has_waypoints,
                          matrix_name=matrix_name,
                          transit_time=transit_time,
                          fuel_cost=fuel_cost,

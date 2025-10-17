@@ -120,6 +120,16 @@
                 <div class="route-arrow">
                     <i class="fas fa-arrow-right"></i>
                 </div>
+                {% if has_waypoints %}
+                <div class="route-point" style="background-color: #fff3cd; border: 2px dashed #ffc107;">
+                    <h5 style="color: #856404;"><i class="fas fa-map-marker-alt"></i> Punkty pośrednie</h5>
+                    <div><strong>Liczba:</strong> {{ waypoints.count(';') + 1 if waypoints else 0 }}</div>
+                    <small style="color: #856404;">Szczegóły w segmentach trasy</small>
+                </div>
+                <div class="route-arrow">
+                    <i class="fas fa-arrow-right"></i>
+                </div>
+                {% endif %}
                 <div class="route-point">
                     <h5>Punkt rozładunku</h5>
                     <div><strong>Kraj:</strong> {{ unload[0] }}</div>
@@ -322,8 +332,15 @@
         const fuelCost = "{{ fuel_cost }}";
         const driverCost = "{{ driver_cost }}";
         
+        // Pobierz waypoints jeśli istnieją
+        const waypoints = "{{ waypoints }}";
+        const hasWaypoints = {{ 'true' if has_waypoints else 'false' }};
+        
         // Przygotuj URL z parametrami
         let url = `/test_truck_route?coord_from=${coordFrom}&coord_to=${coordTo}&load_country=${loadCountry}&load_postal=${loadPostal}&unload_country=${unloadCountry}&unload_postal=${unloadPostal}`;
+        if (hasWaypoints && waypoints) {
+            url += `&waypoints=${encodeURIComponent(waypoints)}`;
+        }
         if (transitTime && transitTime !== 'None') {
             url += `&transit_time=${transitTime}`;
         }
