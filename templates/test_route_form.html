@@ -239,26 +239,48 @@ document.addEventListener('DOMContentLoaded', function() {
                     <i class="fas fa-times"></i> Usuń
                 </button>
             </div>
-            <div class="row">
-                <div class="col-md-4">
-                    <div class="form-group">
-                        <label>Kraj:</label>
-                        <input type="text" name="waypoint_${waypointCount}_country" 
-                               class="form-control" placeholder="np. CZ">
+            
+            <div class="alert alert-warning" style="font-size: 0.9em; padding: 8px 12px;">
+                <i class="fas fa-info-circle"></i> 
+                <strong>Wybierz jeden sposób:</strong> Albo koordynaty, albo kraj + kod pocztowy
+            </div>
+            
+            <div class="form-group mb-3">
+                <label><i class="fas fa-map-pin"></i> Koordynaty (szerokość, długość):</label>
+                <input type="text" name="waypoint_${waypointCount}_coords" 
+                       class="form-control" placeholder="np. 50.0755,14.4378"
+                       onchange="toggleWaypointFields(${waypointCount}, 'coords')">
+                <small class="text-muted">Format: szerokość,długość (np. 50.0755,14.4378)</small>
+            </div>
+            
+            <div style="text-align: center; margin: 15px 0; color: #6c757d; font-weight: bold;">
+                — LUB —
+            </div>
+            
+            <div id="waypoint-${waypointCount}-address-fields">
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="form-group">
+                            <label>Kraj:</label>
+                            <input type="text" name="waypoint_${waypointCount}_country" 
+                                   class="form-control" placeholder="np. CZ"
+                                   onchange="toggleWaypointFields(${waypointCount}, 'address')">
+                        </div>
                     </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="form-group">
-                        <label>Kod pocztowy:</label>
-                        <input type="text" name="waypoint_${waypointCount}_postal" 
-                               class="form-control" placeholder="np. 11000">
+                    <div class="col-md-4">
+                        <div class="form-group">
+                            <label>Kod pocztowy:</label>
+                            <input type="text" name="waypoint_${waypointCount}_postal" 
+                                   class="form-control" placeholder="np. 11000"
+                                   onchange="toggleWaypointFields(${waypointCount}, 'address')">
+                        </div>
                     </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="form-group">
-                        <label>Miasto (opcjonalnie):</label>
-                        <input type="text" name="waypoint_${waypointCount}_city" 
-                               class="form-control" placeholder="np. Praha">
+                    <div class="col-md-4">
+                        <div class="form-group">
+                            <label>Miasto (opcjonalnie):</label>
+                            <input type="text" name="waypoint_${waypointCount}_city" 
+                                   class="form-control" placeholder="np. Praha">
+                        </div>
                     </div>
                 </div>
             </div>
@@ -294,6 +316,41 @@ document.addEventListener('DOMContentLoaded', function() {
                 addBtn.disabled = false;
                 addBtn.innerHTML = '<i class="fas fa-plus-circle"></i> Dodaj punkt pośredni';
             }
+        }
+    };
+    
+    // Funkcja do przełączania pól (koordynaty vs adres)
+    window.toggleWaypointFields = function(id, type) {
+        const coordsInput = document.querySelector(`input[name="waypoint_${id}_coords"]`);
+        const countryInput = document.querySelector(`input[name="waypoint_${id}_country"]`);
+        const postalInput = document.querySelector(`input[name="waypoint_${id}_postal"]`);
+        const cityInput = document.querySelector(`input[name="waypoint_${id}_city"]`);
+        const addressFields = document.getElementById(`waypoint-${id}-address-fields`);
+        
+        if (type === 'coords' && coordsInput.value.trim()) {
+            // Jeśli wpisano koordynaty, wyłącz pola adresowe
+            if (countryInput) countryInput.value = '';
+            if (postalInput) postalInput.value = '';
+            if (cityInput) cityInput.value = '';
+            if (addressFields) addressFields.style.opacity = '0.4';
+            if (countryInput) countryInput.disabled = true;
+            if (postalInput) postalInput.disabled = true;
+            if (cityInput) cityInput.disabled = true;
+        } else if (type === 'address' && (countryInput.value.trim() || postalInput.value.trim())) {
+            // Jeśli wpisano kraj lub kod, wyłącz pole koordynatów
+            if (coordsInput) coordsInput.value = '';
+            coordsInput.style.opacity = '0.4';
+            coordsInput.disabled = true;
+        } else {
+            // Przywróć wszystkie pola
+            if (coordsInput) {
+                coordsInput.style.opacity = '1';
+                coordsInput.disabled = false;
+            }
+            if (addressFields) addressFields.style.opacity = '1';
+            if (countryInput) countryInput.disabled = false;
+            if (postalInput) postalInput.disabled = false;
+            if (cityInput) cityInput.disabled = false;
         }
     };
 });

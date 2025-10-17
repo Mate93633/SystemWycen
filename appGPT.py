@@ -1611,6 +1611,7 @@ def calculate_multi_waypoint_route(route_request: RouteRequest):
 def parse_waypoints_from_form(form_data):
     """
     Parsuje punkty pośrednie z danych formularza Flask.
+    Obsługuje koordynaty lub kraj+kod pocztowy.
     
     Args:
         form_data: request.form z Flask
@@ -1621,6 +1622,24 @@ def parse_waypoints_from_form(form_data):
     waypoints = []
     
     for i in range(1, 6):  # max 5 waypoints
+        # Sprawdź czy są koordynaty
+        wp_coords = form_data.get(f'waypoint_{i}_coords', '').strip()
+        
+        if wp_coords:
+            # Format: "lat,lon"
+            try:
+                coords_parts = wp_coords.split(',')
+                if len(coords_parts) == 2:
+                    lat = float(coords_parts[0].strip())
+                    lon = float(coords_parts[1].strip())
+                    waypoints.append(WaypointData(coordinates=(lat, lon)))
+                    logger.debug(f"Waypoint {i}: koordynaty ({lat:.4f}, {lon:.4f})")
+                    continue
+            except (ValueError, IndexError) as e:
+                logger.warning(f"Nieprawidłowy format koordynatów dla waypoint {i}: '{wp_coords}'")
+                continue
+        
+        # Jeśli nie ma koordynatów, sprawdź kraj+kod
         wp_country = form_data.get(f'waypoint_{i}_country', '').strip().upper()
         wp_postal = form_data.get(f'waypoint_{i}_postal', '').strip()
         wp_city = form_data.get(f'waypoint_{i}_city', '').strip() or None
@@ -1631,6 +1650,7 @@ def parse_waypoints_from_form(form_data):
                 postal_code=wp_postal,
                 city=wp_city
             ))
+            logger.debug(f"Waypoint {i}: {wp_country} {wp_postal}" + (f" ({wp_city})" if wp_city else ""))
     
     return waypoints
 
