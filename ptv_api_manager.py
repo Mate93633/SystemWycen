@@ -104,6 +104,43 @@ class RouteCacheManager:
                 'total_requests': total,
                 'cache_size': len(self.cache)
             }
+    
+    def _generate_waypoints_key(self, waypoints, avoid_switzerland, routing_mode):
+        """
+        Generuje klucz cache dla trasy z waypoints.
+        WAŻNE: Kolejność waypoints ma znaczenie!
+        """
+        waypoints_tuple = tuple(tuple(wp) for wp in waypoints)
+        return (waypoints_tuple, avoid_switzerland, routing_mode)
+    
+    def get_waypoints_route(self, waypoints, avoid_switzerland=False, routing_mode=DEFAULT_ROUTING_MODE):
+        """Pobiera trasę z cache dla waypoints"""
+        with self.lock:
+            key = self._generate_waypoints_key(waypoints, avoid_switzerland, routing_mode)
+            
+            if key in self.cache:
+                cache_entry = self.cache[key]
+                
+                # Sprawdź ważność
+                if datetime.now() - cache_entry['timestamp'] < self.cache_duration:
+                    self.stats['hits'] += 1
+                    return cache_entry['data']
+                else:
+                    # Wygasł - usuń
+                    del self.cache[key]
+            
+            self.stats['misses'] += 1
+            return None
+    
+    def set_waypoints_route(self, waypoints, data, avoid_switzerland=False, routing_mode=DEFAULT_ROUTING_MODE):
+        """Zapisuje trasę do cache dla waypoints"""
+        with self.lock:
+            key = self._generate_waypoints_key(waypoints, avoid_switzerland, routing_mode)
+            self.cache[key] = {
+                'data': data,
+                'timestamp': datetime.now()
+            }
+            logger.debug(f"Cache zapisany dla {len(waypoints)} waypoints")
 
 class PTVRouteManager:
     def __init__(self, api_key, cache_duration=timedelta(days=7), max_requests_per_second=10):
@@ -385,6 +422,203 @@ Parametry: {params}
             time.sleep(0.1)
         
         logger.warning("Timeout")
+        return None
+
+    def get_route_with_waypoints(self, waypoints, avoid_switzerland=False, routing_mode=DEFAULT_ROUTING_MODE):
+        """
+        Oblicza trasę z wieloma waypoints.
+        
+        Args:
+            waypoints: Lista współrzędnych [(lat1, lon1), (lat2, lon2), ...]
+                      Minimum 2 punkty (start, end), maksimum 25
+            avoid_switzerland: Czy unikać Szwajcarii
+            routing_mode: Tryb routingu (FAST, ECO, SHORT)
+        
+        Returns:
+            Dict z wynikami lub None w przypadku błędu
+        """
+        if len(waypoints) < 2:
+            logger.error("Minimum 2 waypoints required")
+            return None
+        
+        if len(waypoints) > 25:
+            logger.error(f"Maximum 25 waypoints allowed, got {len(waypoints)}")
+            return None
+        
+        # Sprawdź cache - rozszerzony klucz
+        cached_result = self.cache_manager.get_waypoints_route(
+            waypoints, avoid_switzerland, routing_mode
+        )
+        if cached_result is not None:
+            logger.info(f"Cache HIT dla trasy z {len(waypoints)} waypoints")
+            return cached_result
+        
+        logger.info(f"Cache MISS - wywołanie PTV API dla {len(waypoints)} waypoints")
+        
+        # Generuj unikalny ID dla requestu
+        request_id = f"route_waypoints_{hash(tuple(waypoints))}_{int(time.time())}"
+        
+        def _make_request():
+            base_url = "https://api.myptv.com/routing/v1/routes"
+            headers = {"apiKey": self.api_key}
+            
+            # Budowanie parametrów - każdy waypoint jako osobny parametr
+            params = []
+            for lat, lon in waypoints:
+                params.append(("waypoints", f"{lat},{lon}"))
+            
+            params.extend([
+                ("results", "LEGS,POLYLINE,TOLL_COSTS,TOLL_SECTIONS,TOLL_SYSTEMS"),
+                ("options[routingMode]", routing_mode),
+                ("options[trafficMode]", "AVERAGE")
+            ])
+            
+            if avoid_switzerland:
+                params.append(("options[prohibitedCountries]", "CH"))
+            
+            logger.info(f"PTV API request: {len(waypoints)} waypoints, avoid_CH={avoid_switzerland}")
+            
+            # Retry logic
+            max_retries = 3
+            retry_delay = 2
+            
+            for attempt in range(max_retries):
+                start_time = time.time()
+                
+                try:
+                    logger.debug(f"Próba {attempt + 1}/{max_retries}")
+                    
+                    response = requests.get(
+                        base_url, 
+                        params=params, 
+                        headers=headers, 
+                        timeout=(5, 35)
+                    )
+                    
+                    request_time = time.time() - start_time
+                    logger.info(f"PTV API response: {response.status_code} w {request_time:.2f}s")
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        
+                        # Przetwarzanie opłat drogowych
+                        toll_info = self.process_toll_costs(data.get('toll', {}))
+                        
+                        # Oblicz całkowity dystans ze wszystkich legs
+                        total_distance = 0
+                        if 'legs' in data and isinstance(data['legs'], list):
+                            total_distance = sum(
+                                leg.get('distance', 0) for leg in data['legs']
+                            )
+                            logger.debug(f"Obliczony dystans: {total_distance/1000:.2f}km z {len(data['legs'])} segmentów")
+                        
+                        result = {
+                            'distance': total_distance / 1000,  # m → km
+                            'legs': data.get('legs', []),
+                            'polyline': data.get('polyline', ''),
+                            'toll_cost': toll_info['total_cost'],
+                            'road_toll': toll_info['costs_by_type']['ROAD']['EUR'],
+                            'other_toll': (
+                                toll_info['costs_by_type']['TUNNEL']['EUR'] +
+                                toll_info['costs_by_type']['BRIDGE']['EUR'] +
+                                toll_info['costs_by_type']['FERRY']['EUR']
+                            ),
+                            'toll_details': toll_info['total_cost_by_country'],
+                            'special_systems': toll_info['special_systems']
+                        }
+                        
+                        # Zapisz w cache
+                        self.cache_manager.set_waypoints_route(
+                            waypoints, result, avoid_switzerland, routing_mode
+                        )
+                        
+                        logger.info("Trasa obliczona i zapisana w cache")
+                        return result
+                    
+                    elif response.status_code == 400 and avoid_switzerland:
+                        logger.warning("Błąd 400 z avoid_switzerland=True - próbuję bez unikania Szwajcarii")
+                        
+                        retry_params = [p for p in params if p[0] != "options[prohibitedCountries]"]
+                        retry_response = requests.get(
+                            base_url, params=retry_params, headers=headers, timeout=(5, 35)
+                        )
+                        
+                        if retry_response.status_code == 200:
+                            data = retry_response.json()
+                            toll_info = self.process_toll_costs(data.get('toll', {}))
+                            
+                            total_distance = 0
+                            if 'legs' in data:
+                                total_distance = sum(leg.get('distance', 0) for leg in data['legs'])
+                            
+                            result = {
+                                'distance': total_distance / 1000,
+                                'legs': data.get('legs', []),
+                                'polyline': data.get('polyline', ''),
+                                'toll_cost': toll_info['total_cost'],
+                                'road_toll': toll_info['costs_by_type']['ROAD']['EUR'],
+                                'other_toll': (
+                                    toll_info['costs_by_type']['TUNNEL']['EUR'] +
+                                    toll_info['costs_by_type']['BRIDGE']['EUR'] +
+                                    toll_info['costs_by_type']['FERRY']['EUR']
+                                ),
+                                'toll_details': toll_info['total_cost_by_country'],
+                                'special_systems': toll_info['special_systems']
+                            }
+                            
+                            # Zapisz z avoid_switzerland=False
+                            self.cache_manager.set_waypoints_route(
+                                waypoints, result, False, routing_mode
+                            )
+                            
+                            logger.info("Trasa obliczona bez unikania Szwajcarii")
+                            return result
+                        else:
+                            logger.error(f"Fallback również nieudany: {retry_response.status_code}")
+                            return None
+                    
+                    else:
+                        logger.warning(f"PTV API błąd: {response.status_code}")
+                    
+                except (requests.exceptions.Timeout, requests.exceptions.ReadTimeout) as e:
+                    request_time = time.time() - start_time
+                    
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Timeout ({type(e).__name__}) po {request_time:.2f}s - retry za {retry_delay}s...")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        logger.error(f"Wszystkie próby zakończone timeoutem po {request_time:.2f}s")
+                        return None
+                
+                except Exception as e:
+                    logger.error(f"Nieoczekiwany błąd: {e}", exc_info=True)
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    return None
+            
+            logger.error("Wszystkie próby nieudane")
+            return None
+        
+        # Dodaj request do kolejki
+        self.request_queue.add_request(request_id, _make_request)
+        
+        # Czekaj na wynik (dłuższy timeout dla tras z waypoints)
+        max_wait = 40
+        start_time = time.time()
+        
+        while time.time() - start_time < max_wait:
+            result = self.request_queue.get_result(request_id)
+            if result is not None:
+                if result['status'] == 'success':
+                    return result['data']
+                else:
+                    logger.error(f"Request zakończony błędem: {result.get('error')}")
+                    return None
+            time.sleep(0.1)
+        
+        logger.warning(f"Timeout oczekiwania na wynik ({max_wait}s)")
         return None
 
     def get_stats(self):
