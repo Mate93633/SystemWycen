@@ -42,6 +42,42 @@ from typing import List, Optional, Tuple
 from session_manager import SessionManager, SessionCleanupScheduler
 from user_session_data import UserSessionData
 
+# ============================================================================
+# IMPORTY Z NOWEJ STRUKTURY MODUŁOWEJ (app/)
+# ============================================================================
+# Konfiguracja - stałe i ustawienia
+from app.config.settings import (
+    PTV_API_KEY as CONFIG_PTV_API_KEY,
+    DEFAULT_ROUTING_MODE as CONFIG_DEFAULT_ROUTING_MODE,
+    DEFAULT_FUEL_COST as CONFIG_DEFAULT_FUEL_COST,
+    DEFAULT_DRIVER_COST as CONFIG_DEFAULT_DRIVER_COST,
+)
+
+# Mapowania krajów
+from app.config.countries import (
+    ISO_CODES as CONFIG_ISO_CODES,
+    COUNTRY_MAPPING as CONFIG_COUNTRY_MAPPING,
+    COUNTRY_TO_ISO as CONFIG_COUNTRY_TO_ISO,
+    normalize_country as config_normalize_country,
+)
+
+# Modele danych
+from app.models.exceptions import (
+    GeocodeException as ModelGeocodeException,
+    LocationVerificationRequired as ModelLocationVerificationRequired,
+)
+
+# Funkcje pomocnicze
+from app.utils.formatting import (
+    safe_float as util_safe_float,
+    format_currency as util_format_currency,
+    format_coordinates as util_format_coordinates,
+    clean_text as util_clean_text,
+    select_best_rate as util_select_best_rate,
+    calculate_fracht as util_calculate_fracht,
+)
+from app.utils.geo import haversine as util_haversine
+
 # Blokada dla bezpiecznej aktualizacji zmiennych globalnych (używana przez starszy kod)
 # TODO: Stopniowo usunąć po pełnej migracji do SessionManager
 progress_lock = threading.Lock()
