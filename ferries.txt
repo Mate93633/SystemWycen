@@ -1,0 +1,781 @@
+
+FERRY_ROUTES = {
+    # =========================================================================
+    # GRECJA ↔ WŁOCHY (Morze Adriatyckie)
+    # =========================================================================
+    ('GR', 'IT'): [
+        {
+            'name': 'Patras-Ancona',
+            'start': (38.2444, 21.7350),      # Patras, Greece
+            'end': (43.6158, 13.5184),        # Ancona, Italy
+            'cost': 1500.0,
+            'duration_hours': 21,
+            'operator': 'Superfast Ferries / ANEK Lines'
+        },
+        {
+            'name': 'Patras-Bari',
+            'start': (38.2444, 21.7350),      # Patras, Greece
+            'end': (41.1171, 16.8719),        # Bari, Italy
+            'cost': 1200.0,
+            'duration_hours': 16,
+            'operator': 'Superfast Ferries'
+        },
+        {
+            'name': 'Igoumenitsa-Ancona',
+            'start': (39.5030, 20.2660),      # Igoumenitsa, Greece
+            'end': (43.6158, 13.5184),        # Ancona, Italy
+            'cost': 1300.0,
+            'duration_hours': 15,
+            'operator': 'Superfast Ferries / ANEK Lines'
+        },
+        {
+            'name': 'Igoumenitsa-Bari',
+            'start': (39.5030, 20.2660),      # Igoumenitsa, Greece
+            'end': (41.1171, 16.8719),        # Bari, Italy
+            'cost': 1000.0,
+            'duration_hours': 11,
+            'operator': 'Superfast Ferries'
+        },
+        {
+            'name': 'Igoumenitsa-Brindisi',
+            'start': (39.5030, 20.2660),      # Igoumenitsa, Greece
+            'end': (40.6378, 17.9476),        # Brindisi, Italy
+            'cost': 800.0,
+            'duration_hours': 8,
+            'operator': 'Grimaldi Lines'
+        },
+    ],
+    ('IT', 'GR'): [
+        {
+            'name': 'Ancona-Patras',
+            'start': (43.6158, 13.5184),      # Ancona, Italy
+            'end': (38.2444, 21.7350),        # Patras, Greece
+            'cost': 1500.0,
+            'duration_hours': 21,
+            'operator': 'Superfast Ferries / ANEK Lines'
+        },
+        {
+            'name': 'Bari-Patras',
+            'start': (41.1171, 16.8719),      # Bari, Italy
+            'end': (38.2444, 21.7350),        # Patras, Greece
+            'cost': 1200.0,
+            'duration_hours': 16,
+            'operator': 'Superfast Ferries'
+        },
+        {
+            'name': 'Ancona-Igoumenitsa',
+            'start': (43.6158, 13.5184),      # Ancona, Italy
+            'end': (39.5030, 20.2660),        # Igoumenitsa, Greece
+            'cost': 1300.0,
+            'duration_hours': 15,
+            'operator': 'Superfast Ferries / ANEK Lines'
+        },
+        {
+            'name': 'Bari-Igoumenitsa',
+            'start': (41.1171, 16.8719),      # Bari, Italy
+            'end': (39.5030, 20.2660),        # Igoumenitsa, Greece
+            'cost': 1000.0,
+            'duration_hours': 11,
+            'operator': 'Superfast Ferries'
+        },
+        {
+            'name': 'Brindisi-Igoumenitsa',
+            'start': (40.6378, 17.9476),      # Brindisi, Italy
+            'end': (39.5030, 20.2660),        # Igoumenitsa, Greece
+            'cost': 800.0,
+            'duration_hours': 8,
+            'operator': 'Grimaldi Lines'
+        },
+    ],
+    
+    # =========================================================================
+    # WIELKA BRYTANIA ↔ FRANCJA (Kanał La Manche)
+    # =========================================================================
+    ('GB', 'FR'): [
+        {
+            'name': 'Dover-Calais',
+            'start': (51.1279, 1.3134),       # Dover, UK
+            'end': (50.9513, 1.8587),         # Calais, France
+            'cost': 180.0,
+            'duration_hours': 1.5,
+            'operator': 'P&O Ferries / DFDS'
+        },
+        {
+            'name': 'Dover-Dunkirk',
+            'start': (51.1279, 1.3134),       # Dover, UK
+            'end': (51.0343, 2.3768),         # Dunkirk, France
+            'cost': 170.0,
+            'duration_hours': 2,
+            'operator': 'DFDS'
+        },
+        {
+            'name': 'Folkestone-Calais (Eurotunnel)',
+            'start': (51.0944, 1.1408),       # Folkestone, UK
+            'end': (50.9228, 1.7917),         # Calais (Coquelles), France
+            'cost': 250.0,
+            'duration_hours': 0.6,
+            'operator': 'Eurotunnel'
+        },
+        {
+            'name': 'Portsmouth-Le Havre',
+            'start': (50.8198, -1.0879),      # Portsmouth, UK
+            'end': (49.4944, 0.1079),         # Le Havre, France
+            'cost': 350.0,
+            'duration_hours': 5.5,
+            'operator': 'Brittany Ferries'
+        },
+        {
+            'name': 'Newhaven-Dieppe',
+            'start': (50.7892, 0.0619),       # Newhaven, UK
+            'end': (49.9333, 1.0833),         # Dieppe, France
+            'cost': 280.0,
+            'duration_hours': 4,
+            'operator': 'DFDS'
+        },
+    ],
+    ('FR', 'GB'): [
+        {
+            'name': 'Calais-Dover',
+            'start': (50.9513, 1.8587),       # Calais, France
+            'end': (51.1279, 1.3134),         # Dover, UK
+            'cost': 180.0,
+            'duration_hours': 1.5,
+            'operator': 'P&O Ferries / DFDS'
+        },
+        {
+            'name': 'Dunkirk-Dover',
+            'start': (51.0343, 2.3768),       # Dunkirk, France
+            'end': (51.1279, 1.3134),         # Dover, UK
+            'cost': 170.0,
+            'duration_hours': 2,
+            'operator': 'DFDS'
+        },
+        {
+            'name': 'Calais-Folkestone (Eurotunnel)',
+            'start': (50.9228, 1.7917),       # Calais (Coquelles), France
+            'end': (51.0944, 1.1408),         # Folkestone, UK
+            'cost': 250.0,
+            'duration_hours': 0.6,
+            'operator': 'Eurotunnel'
+        },
+        {
+            'name': 'Le Havre-Portsmouth',
+            'start': (49.4944, 0.1079),       # Le Havre, France
+            'end': (50.8198, -1.0879),        # Portsmouth, UK
+            'cost': 350.0,
+            'duration_hours': 5.5,
+            'operator': 'Brittany Ferries'
+        },
+        {
+            'name': 'Dieppe-Newhaven',
+            'start': (49.9333, 1.0833),       # Dieppe, France
+            'end': (50.7892, 0.0619),         # Newhaven, UK
+            'cost': 280.0,
+            'duration_hours': 4,
+            'operator': 'DFDS'
+        },
+    ],
+    
+    # =========================================================================
+    # WIELKA BRYTANIA ↔ HISZPANIA (Bezpośredni)
+    # =========================================================================
+    ('GB', 'ES'): [
+        {
+            'name': 'Portsmouth-Santander',
+            'start': (50.8198, -1.0879),      # Portsmouth, UK
+            'end': (43.4623, -3.8099),        # Santander, Spain
+            'cost': 900.0,
+            'duration_hours': 24,
+            'operator': 'Brittany Ferries'
+        },
+        {
+            'name': 'Portsmouth-Bilbao',
+            'start': (50.8198, -1.0879),      # Portsmouth, UK
+            'end': (43.3183, -3.0137),        # Bilbao, Spain
+            'cost': 900.0,
+            'duration_hours': 28,
+            'operator': 'Brittany Ferries'
+        },
+        {
+            'name': 'Plymouth-Santander',
+            'start': (50.3659, -4.1424),      # Plymouth, UK
+            'end': (43.4623, -3.8099),        # Santander, Spain
+            'cost': 850.0,
+            'duration_hours': 20,
+            'operator': 'Brittany Ferries'
+        },
+    ],
+    ('ES', 'GB'): [
+        {
+            'name': 'Santander-Portsmouth',
+            'start': (43.4623, -3.8099),      # Santander, Spain
+            'end': (50.8198, -1.0879),        # Portsmouth, UK
+            'cost': 900.0,
+            'duration_hours': 24,
+            'operator': 'Brittany Ferries'
+        },
+        {
+            'name': 'Bilbao-Portsmouth',
+            'start': (43.3183, -3.0137),      # Bilbao, Spain
+            'end': (50.8198, -1.0879),        # Portsmouth, UK
+            'cost': 900.0,
+            'duration_hours': 28,
+            'operator': 'Brittany Ferries'
+        },
+        {
+            'name': 'Santander-Plymouth',
+            'start': (43.4623, -3.8099),      # Santander, Spain
+            'end': (50.3659, -4.1424),        # Plymouth, UK
+            'cost': 850.0,
+            'duration_hours': 20,
+            'operator': 'Brittany Ferries'
+        },
+    ],
+    
+    # =========================================================================
+    # WIELKA BRYTANIA ↔ IRLANDIA
+    # =========================================================================
+    ('GB', 'IE'): [
+        {
+            'name': 'Holyhead-Dublin',
+            'start': (53.3095, -4.6318),      # Holyhead, UK
+            'end': (53.3478, -6.2297),        # Dublin, Ireland
+            'cost': 350.0,
+            'duration_hours': 3.5,
+            'operator': 'Irish Ferries / Stena Line'
+        },
+        {
+            'name': 'Liverpool-Dublin',
+            'start': (53.4508, -3.0187),      # Liverpool, UK
+            'end': (53.3478, -6.2297),        # Dublin, Ireland
+            'cost': 400.0,
+            'duration_hours': 8,
+            'operator': 'P&O Ferries'
+        },
+        {
+            'name': 'Fishguard-Rosslare',
+            'start': (51.9933, -4.9833),      # Fishguard, UK
+            'end': (52.2514, -6.3361),        # Rosslare, Ireland
+            'cost': 320.0,
+            'duration_hours': 3.5,
+            'operator': 'Stena Line'
+        },
+        {
+            'name': 'Pembroke-Rosslare',
+            'start': (51.6833, -4.9333),      # Pembroke, UK
+            'end': (52.2514, -6.3361),        # Rosslare, Ireland
+            'cost': 330.0,
+            'duration_hours': 4,
+            'operator': 'Irish Ferries'
+        },
+    ],
+    ('IE', 'GB'): [
+        {
+            'name': 'Dublin-Holyhead',
+            'start': (53.3478, -6.2297),      # Dublin, Ireland
+            'end': (53.3095, -4.6318),        # Holyhead, UK
+            'cost': 350.0,
+            'duration_hours': 3.5,
+            'operator': 'Irish Ferries / Stena Line'
+        },
+        {
+            'name': 'Dublin-Liverpool',
+            'start': (53.3478, -6.2297),      # Dublin, Ireland
+            'end': (53.4508, -3.0187),        # Liverpool, UK
+            'cost': 400.0,
+            'duration_hours': 8,
+            'operator': 'P&O Ferries'
+        },
+        {
+            'name': 'Rosslare-Fishguard',
+            'start': (52.2514, -6.3361),      # Rosslare, Ireland
+            'end': (51.9933, -4.9833),        # Fishguard, UK
+            'cost': 320.0,
+            'duration_hours': 3.5,
+            'operator': 'Stena Line'
+        },
+        {
+            'name': 'Rosslare-Pembroke',
+            'start': (52.2514, -6.3361),      # Rosslare, Ireland
+            'end': (51.6833, -4.9333),        # Pembroke, UK
+            'cost': 330.0,
+            'duration_hours': 4,
+            'operator': 'Irish Ferries'
+        },
+    ],
+    
+    # =========================================================================
+    # IRLANDIA ↔ FRANCJA (Bezpośredni - post-Brexit popular)
+    # =========================================================================
+    ('IE', 'FR'): [
+        {
+            'name': 'Dublin-Cherbourg',
+            'start': (53.3478, -6.2297),      # Dublin, Ireland
+            'end': (49.6337, -1.6219),        # Cherbourg, France
+            'cost': 500.0,
+            'duration_hours': 17,
+            'operator': 'Irish Ferries / Stena Line'
+        },
+        {
+            'name': 'Rosslare-Cherbourg',
+            'start': (52.2514, -6.3361),      # Rosslare, Ireland
+            'end': (49.6337, -1.6219),        # Cherbourg, France
+            'cost': 480.0,
+            'duration_hours': 16,
+            'operator': 'Stena Line'
+        },
+        {
+            'name': 'Rosslare-Bilbao',
+            'start': (52.2514, -6.3361),      # Rosslare, Ireland
+            'end': (43.3183, -3.0137),        # Bilbao, Spain
+            'cost': 650.0,
+            'duration_hours': 27,
+            'operator': 'Brittany Ferries'
+        },
+    ],
+    ('FR', 'IE'): [
+        {
+            'name': 'Cherbourg-Dublin',
+            'start': (49.6337, -1.6219),      # Cherbourg, France
+            'end': (53.3478, -6.2297),        # Dublin, Ireland
+            'cost': 500.0,
+            'duration_hours': 17,
+            'operator': 'Irish Ferries / Stena Line'
+        },
+        {
+            'name': 'Cherbourg-Rosslare',
+            'start': (49.6337, -1.6219),      # Cherbourg, France
+            'end': (52.2514, -6.3361),        # Rosslare, Ireland
+            'cost': 480.0,
+            'duration_hours': 16,
+            'operator': 'Stena Line'
+        },
+    ],
+    
+    # =========================================================================
+    # WŁOCHY ↔ HISZPANIA
+    # =========================================================================
+    ('IT', 'ES'): [
+        {
+            'name': 'Civitavecchia-Barcelona',
+            'start': (42.0931, 11.7865),      # Civitavecchia, Italy
+            'end': (41.3851, 2.1734),         # Barcelona, Spain
+            'cost': 700.0,
+            'duration_hours': 20,
+            'operator': 'Grimaldi Lines'
+        },
+        {
+            'name': 'Genoa-Barcelona',
+            'start': (44.4056, 8.9463),       # Genoa, Italy
+            'end': (41.3851, 2.1734),         # Barcelona, Spain
+            'cost': 650.0,
+            'duration_hours': 18,
+            'operator': 'Grimaldi Lines'
+        },
+        {
+            'name': 'Livorno-Barcelona',
+            'start': (43.5485, 10.3106),      # Livorno, Italy
+            'end': (41.3851, 2.1734),         # Barcelona, Spain
+            'cost': 680.0,
+            'duration_hours': 19,
+            'operator': 'Grimaldi Lines'
+        },
+    ],
+    ('ES', 'IT'): [
+        {
+            'name': 'Barcelona-Civitavecchia',
+            'start': (41.3851, 2.1734),       # Barcelona, Spain
+            'end': (42.0931, 11.7865),        # Civitavecchia, Italy
+            'cost': 700.0,
+            'duration_hours': 20,
+            'operator': 'Grimaldi Lines'
+        },
+        {
+            'name': 'Barcelona-Genoa',
+            'start': (41.3851, 2.1734),       # Barcelona, Spain
+            'end': (44.4056, 8.9463),         # Genoa, Italy
+            'cost': 650.0,
+            'duration_hours': 18,
+            'operator': 'Grimaldi Lines'
+        },
+        {
+            'name': 'Barcelona-Livorno',
+            'start': (41.3851, 2.1734),       # Barcelona, Spain
+            'end': (43.5485, 10.3106),        # Livorno, Italy
+            'cost': 680.0,
+            'duration_hours': 19,
+            'operator': 'Grimaldi Lines'
+        },
+    ],
+    
+    # =========================================================================
+    # SKANDYNAWIA (Bałtyk)
+    # =========================================================================
+    # Niemcy ↔ Szwecja
+    ('DE', 'SE'): [
+        {
+            'name': 'Rostock-Trelleborg',
+            'start': (54.0833, 12.1333),      # Rostock, Germany
+            'end': (55.3667, 13.1500),        # Trelleborg, Sweden
+            'cost': 350.0,
+            'duration_hours': 6,
+            'operator': 'Stena Line / TT-Line'
+        },
+        {
+            'name': 'Travemunde-Trelleborg',
+            'start': (53.9603, 10.8697),      # Travemunde, Germany
+            'end': (55.3667, 13.1500),        # Trelleborg, Sweden
+            'cost': 380.0,
+            'duration_hours': 8,
+            'operator': 'TT-Line'
+        },
+        {
+            'name': 'Kiel-Gothenburg',
+            'start': (54.3233, 10.1394),      # Kiel, Germany
+            'end': (57.7089, 11.9746),        # Gothenburg, Sweden
+            'cost': 450.0,
+            'duration_hours': 14,
+            'operator': 'Stena Line'
+        },
+    ],
+    ('SE', 'DE'): [
+        {
+            'name': 'Trelleborg-Rostock',
+            'start': (55.3667, 13.1500),      # Trelleborg, Sweden
+            'end': (54.0833, 12.1333),        # Rostock, Germany
+            'cost': 350.0,
+            'duration_hours': 6,
+            'operator': 'Stena Line / TT-Line'
+        },
+        {
+            'name': 'Trelleborg-Travemunde',
+            'start': (55.3667, 13.1500),      # Trelleborg, Sweden
+            'end': (53.9603, 10.8697),        # Travemunde, Germany
+            'cost': 380.0,
+            'duration_hours': 8,
+            'operator': 'TT-Line'
+        },
+        {
+            'name': 'Gothenburg-Kiel',
+            'start': (57.7089, 11.9746),      # Gothenburg, Sweden
+            'end': (54.3233, 10.1394),        # Kiel, Germany
+            'cost': 450.0,
+            'duration_hours': 14,
+            'operator': 'Stena Line'
+        },
+    ],
+    
+    # Niemcy ↔ Dania
+    ('DE', 'DK'): [
+        {
+            'name': 'Puttgarden-Rodby',
+            'start': (54.5000, 11.2333),      # Puttgarden, Germany
+            'end': (54.6500, 11.3500),        # Rodby, Denmark
+            'cost': 180.0,
+            'duration_hours': 0.75,
+            'operator': 'Scandlines'
+        },
+        {
+            'name': 'Rostock-Gedser',
+            'start': (54.0833, 12.1333),      # Rostock, Germany
+            'end': (54.5667, 11.9333),        # Gedser, Denmark
+            'cost': 220.0,
+            'duration_hours': 2,
+            'operator': 'Scandlines'
+        },
+    ],
+    ('DK', 'DE'): [
+        {
+            'name': 'Rodby-Puttgarden',
+            'start': (54.6500, 11.3500),      # Rodby, Denmark
+            'end': (54.5000, 11.2333),        # Puttgarden, Germany
+            'cost': 180.0,
+            'duration_hours': 0.75,
+            'operator': 'Scandlines'
+        },
+        {
+            'name': 'Gedser-Rostock',
+            'start': (54.5667, 11.9333),      # Gedser, Denmark
+            'end': (54.0833, 12.1333),        # Rostock, Germany
+            'cost': 220.0,
+            'duration_hours': 2,
+            'operator': 'Scandlines'
+        },
+    ],
+    
+    # Szwecja ↔ Dania
+    ('SE', 'DK'): [
+        {
+            'name': 'Helsingborg-Helsingor',
+            'start': (56.0465, 12.6945),      # Helsingborg, Sweden
+            'end': (56.0360, 12.6136),        # Helsingor, Denmark
+            'cost': 120.0,
+            'duration_hours': 0.33,
+            'operator': 'Scandlines / ForSea'
+        },
+        {
+            'name': 'Gothenburg-Frederikshavn',
+            'start': (57.7089, 11.9746),      # Gothenburg, Sweden
+            'end': (57.4333, 10.5333),        # Frederikshavn, Denmark
+            'cost': 200.0,
+            'duration_hours': 3.5,
+            'operator': 'Stena Line'
+        },
+    ],
+    ('DK', 'SE'): [
+        {
+            'name': 'Helsingor-Helsingborg',
+            'start': (56.0360, 12.6136),      # Helsingor, Denmark
+            'end': (56.0465, 12.6945),        # Helsingborg, Sweden
+            'cost': 120.0,
+            'duration_hours': 0.33,
+            'operator': 'Scandlines / ForSea'
+        },
+        {
+            'name': 'Frederikshavn-Gothenburg',
+            'start': (57.4333, 10.5333),      # Frederikshavn, Denmark
+            'end': (57.7089, 11.9746),        # Gothenburg, Sweden
+            'cost': 200.0,
+            'duration_hours': 3.5,
+            'operator': 'Stena Line'
+        },
+    ],
+    
+    # Szwecja ↔ Polska
+    ('SE', 'PL'): [
+        {
+            'name': 'Ystad-Swinoujscie',
+            'start': (55.4295, 13.8200),      # Ystad, Sweden
+            'end': (53.9100, 14.2478),        # Swinoujscie, Poland
+            'cost': 280.0,
+            'duration_hours': 7,
+            'operator': 'Unity Line / Polferries'
+        },
+        {
+            'name': 'Karlskrona-Gdynia',
+            'start': (56.1608, 15.5861),      # Karlskrona, Sweden
+            'end': (54.5189, 18.5306),        # Gdynia, Poland
+            'cost': 320.0,
+            'duration_hours': 10,
+            'operator': 'Stena Line'
+        },
+        {
+            'name': 'Nynashamn-Gdansk',
+            'start': (58.9000, 17.9500),      # Nynashamn, Sweden
+            'end': (54.3520, 18.6466),        # Gdansk, Poland
+            'cost': 350.0,
+            'duration_hours': 18,
+            'operator': 'Polferries'
+        },
+    ],
+    ('PL', 'SE'): [
+        {
+            'name': 'Swinoujscie-Ystad',
+            'start': (53.9100, 14.2478),      # Swinoujscie, Poland
+            'end': (55.4295, 13.8200),        # Ystad, Sweden
+            'cost': 280.0,
+            'duration_hours': 7,
+            'operator': 'Unity Line / Polferries'
+        },
+        {
+            'name': 'Gdynia-Karlskrona',
+            'start': (54.5189, 18.5306),      # Gdynia, Poland
+            'end': (56.1608, 15.5861),        # Karlskrona, Sweden
+            'cost': 320.0,
+            'duration_hours': 10,
+            'operator': 'Stena Line'
+        },
+        {
+            'name': 'Gdansk-Nynashamn',
+            'start': (54.3520, 18.6466),      # Gdansk, Poland
+            'end': (58.9000, 17.9500),        # Nynashamn, Sweden
+            'cost': 350.0,
+            'duration_hours': 18,
+            'operator': 'Polferries'
+        },
+    ],
+    
+    # Finlandia ↔ Szwecja
+    ('FI', 'SE'): [
+        {
+            'name': 'Helsinki-Stockholm',
+            'start': (60.1699, 24.9384),      # Helsinki, Finland
+            'end': (59.3293, 18.0686),        # Stockholm, Sweden
+            'cost': 400.0,
+            'duration_hours': 16,
+            'operator': 'Viking Line / Tallink Silja'
+        },
+        {
+            'name': 'Turku-Stockholm',
+            'start': (60.4518, 22.2666),      # Turku, Finland
+            'end': (59.3293, 18.0686),        # Stockholm, Sweden
+            'cost': 350.0,
+            'duration_hours': 11,
+            'operator': 'Viking Line / Tallink Silja'
+        },
+    ],
+    ('SE', 'FI'): [
+        {
+            'name': 'Stockholm-Helsinki',
+            'start': (59.3293, 18.0686),      # Stockholm, Sweden
+            'end': (60.1699, 24.9384),        # Helsinki, Finland
+            'cost': 400.0,
+            'duration_hours': 16,
+            'operator': 'Viking Line / Tallink Silja'
+        },
+        {
+            'name': 'Stockholm-Turku',
+            'start': (59.3293, 18.0686),      # Stockholm, Sweden
+            'end': (60.4518, 22.2666),        # Turku, Finland
+            'cost': 350.0,
+            'duration_hours': 11,
+            'operator': 'Viking Line / Tallink Silja'
+        },
+    ],
+    
+    # Finlandia ↔ Estonia
+    ('FI', 'EE'): [
+        {
+            'name': 'Helsinki-Tallinn',
+            'start': (60.1699, 24.9384),      # Helsinki, Finland
+            'end': (59.4370, 24.7536),        # Tallinn, Estonia
+            'cost': 180.0,
+            'duration_hours': 2.5,
+            'operator': 'Tallink Silja / Viking Line / Eckerö Line'
+        },
+    ],
+    ('EE', 'FI'): [
+        {
+            'name': 'Tallinn-Helsinki',
+            'start': (59.4370, 24.7536),      # Tallinn, Estonia
+            'end': (60.1699, 24.9384),        # Helsinki, Finland
+            'cost': 180.0,
+            'duration_hours': 2.5,
+            'operator': 'Tallink Silja / Viking Line / Eckerö Line'
+        },
+    ],
+    
+    # Niemcy ↔ Litwa (alternatywa dla jazdy przez Polskę)
+    ('DE', 'LT'): [
+        {
+            'name': 'Kiel-Klaipeda',
+            'start': (54.3233, 10.1394),      # Kiel, Germany
+            'end': (55.7033, 21.1443),        # Klaipeda, Lithuania
+            'cost': 450.0,
+            'duration_hours': 21,
+            'operator': 'DFDS'
+        },
+    ],
+    ('LT', 'DE'): [
+        {
+            'name': 'Klaipeda-Kiel',
+            'start': (55.7033, 21.1443),      # Klaipeda, Lithuania
+            'end': (54.3233, 10.1394),        # Kiel, Germany
+            'cost': 450.0,
+            'duration_hours': 21,
+            'operator': 'DFDS'
+        },
+    ],
+    
+    # Szwecja ↔ Litwa
+    ('SE', 'LT'): [
+        {
+            'name': 'Karlshamn-Klaipeda',
+            'start': (56.1667, 14.8667),      # Karlshamn, Sweden
+            'end': (55.7033, 21.1443),        # Klaipeda, Lithuania
+            'cost': 280.0,
+            'duration_hours': 14,
+            'operator': 'DFDS'
+        },
+    ],
+    ('LT', 'SE'): [
+        {
+            'name': 'Klaipeda-Karlshamn',
+            'start': (55.7033, 21.1443),      # Klaipeda, Lithuania
+            'end': (56.1667, 14.8667),        # Karlshamn, Sweden
+            'cost': 280.0,
+            'duration_hours': 14,
+            'operator': 'DFDS'
+        },
+    ],
+    
+    # =========================================================================
+    # HOLANDIA ↔ WIELKA BRYTANIA
+    # =========================================================================
+    ('NL', 'GB'): [
+        {
+            'name': 'Hook of Holland-Harwich',
+            'start': (51.9800, 4.1300),       # Hook of Holland, Netherlands
+            'end': (51.9460, 1.2843),         # Harwich, UK
+            'cost': 280.0,
+            'duration_hours': 7,
+            'operator': 'Stena Line'
+        },
+        {
+            'name': 'Rotterdam-Hull',
+            'start': (51.9225, 4.4792),       # Rotterdam (Europoort), Netherlands
+            'end': (53.7444, -0.3340),        # Hull, UK
+            'cost': 350.0,
+            'duration_hours': 11,
+            'operator': 'P&O Ferries'
+        },
+        {
+            'name': 'Amsterdam-Newcastle',
+            'start': (52.4092, 4.9389),       # IJmuiden (Amsterdam), Netherlands
+            'end': (55.0077, -1.4400),        # Newcastle, UK
+            'cost': 400.0,
+            'duration_hours': 16,
+            'operator': 'DFDS'
+        },
+    ],
+    ('GB', 'NL'): [
+        {
+            'name': 'Harwich-Hook of Holland',
+            'start': (51.9460, 1.2843),       # Harwich, UK
+            'end': (51.9800, 4.1300),         # Hook of Holland, Netherlands
+            'cost': 280.0,
+            'duration_hours': 7,
+            'operator': 'Stena Line'
+        },
+        {
+            'name': 'Hull-Rotterdam',
+            'start': (53.7444, -0.3340),      # Hull, UK
+            'end': (51.9225, 4.4792),         # Rotterdam (Europoort), Netherlands
+            'cost': 350.0,
+            'duration_hours': 11,
+            'operator': 'P&O Ferries'
+        },
+        {
+            'name': 'Newcastle-Amsterdam',
+            'start': (55.0077, -1.4400),      # Newcastle, UK
+            'end': (52.4092, 4.9389),         # IJmuiden (Amsterdam), Netherlands
+            'cost': 400.0,
+            'duration_hours': 16,
+            'operator': 'DFDS'
+        },
+    ],
+    
+    # =========================================================================
+    # BELGIA ↔ WIELKA BRYTANIA
+    # =========================================================================
+    ('BE', 'GB'): [
+        {
+            'name': 'Zeebrugge-Hull',
+            'start': (51.3333, 3.1833),       # Zeebrugge, Belgium
+            'end': (53.7444, -0.3340),        # Hull, UK
+            'cost': 320.0,
+            'duration_hours': 12,
+            'operator': 'P&O Ferries'
+        },
+    ],
+    ('GB', 'BE'): [
+        {
+            'name': 'Hull-Zeebrugge',
+            'start': (53.7444, -0.3340),      # Hull, UK
+            'end': (51.3333, 3.1833),         # Zeebrugge, Belgium
+            'cost': 320.0,
+            'duration_hours': 12,
+            'operator': 'P&O Ferries'
+        },
+    ],
+}

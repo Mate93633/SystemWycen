@@ -139,6 +139,20 @@
             </div>
         </div>
         
+        <div id="route-data" 
+             data-coord-from="{{ load[2] }}"
+             data-coord-to="{{ unload[2] }}"
+             data-load-country="{{ load[0] }}"
+             data-load-postal="{{ load[1] }}"
+             data-unload-country="{{ unload[0] }}"
+             data-unload-postal="{{ unload[1] }}"
+             data-transit-time="{{ transit_time }}"
+             data-fuel-cost="{{ fuel_cost }}"
+             data-driver-cost="{{ driver_cost }}"
+             data-waypoints="{{ waypoints }}"
+             data-has-waypoints="{{ has_waypoints|tojson }}"
+             style="display: none;"></div>
+        
         <div id="loading-container" class="text-center p-3">
             <div class="spinner"></div>
             <p class="mt-2">Obliczanie trasy i kosztów...</p>
@@ -165,11 +179,11 @@
                                     <span id="suggested-fracht-historical" class="route-detail-value">-</span>
                                 </div>
                                 <div class="route-detail-item">
-                                    <span class="route-detail-label">Sugerowany fracht wg matrixa:</span>
+                                    <span class="route-detail-label">Suma kosztów:</span>
                                     <span id="suggested-fracht-matrix" class="route-detail-value">-</span>
                                 </div>
                                 <div class="route-detail-item">
-                                    <span class="route-detail-label">Sugerowana stawka wg matrixa:</span>
+                                    <span class="route-detail-label">Stawka minimalna - TYLKO na pokrycie kosztów:</span>
                                     <span id="suggested-rate-matrix" class="route-detail-value">-</span>
                                 </div>
                                 <div class="route-detail-item">
@@ -177,8 +191,8 @@
                                     <span id="expected-profit" class="route-detail-value">-</span>
                                 </div>
                                 <div class="route-detail-item">
-                                                            <span class="route-detail-label">Transit time (dni):</span>
-                        <span id="driver-days" class="route-detail-value">-</span>
+                                    <span class="route-detail-label">Transit time (dni):</span>
+                                    <span id="driver-days" class="route-detail-value">-</span>
                                 </div>
                                 <div class="route-detail-item">
                                     <span class="route-detail-label">Relacja regionalna:</span>
@@ -202,10 +216,13 @@
                                     <span class="route-detail-label">Dystans:</span>
                                     <span id="distance" class="route-detail-value">-</span>
                                 </div>
-                        <div class="route-detail-item">
+                                <div class="route-detail-item">
                                     <span class="route-detail-label">Podlot:</span>
                                     <span id="approach-distance" class="route-detail-value">-</span>
-                                </div>        
+                                </div>
+                                <div class="route-detail-item">
+                                    <span class="route-detail-label">Odjazd:</span>
+                                    <span id="departure-distance" class="route-detail-value">-</span>
                                 </div>
                             </div>
                         </div>
@@ -236,6 +253,10 @@
                                     <span id="approach-tolls" class="route-detail-value">-</span>
                                 </div>
                                 <div class="route-detail-item">
+                                    <span class="route-detail-label">Opłaty odjazd:</span>
+                                    <span id="departure-tolls" class="route-detail-value">-</span>
+                                </div>
+                                <div class="route-detail-item">
                                     <span class="route-detail-label">Opłaty dodatkowe:</span>
                                     <span id="other-tolls" class="route-detail-value">-</span>
                                 </div>
@@ -246,6 +267,10 @@
                                 <div class="route-detail-item">
                                     <span class="route-detail-label">Suma kosztów:</span>
                                     <span id="total-cost" class="route-detail-value">-</span>
+                                </div>
+                                <div class="route-detail-item">
+                                    <span class="route-detail-label">Suma kosztów (bez podlotu i odjazdu):</span>
+                                    <span id="total-cost-without-approach" class="route-detail-value">-</span>
                                 </div>
                             </div>
                         </div>
@@ -334,27 +359,20 @@
     document.addEventListener('DOMContentLoaded', function() {
         const loadingContainer = document.getElementById('loading-container');
         const resultsContainer = document.getElementById('results-container');
+        const routeData = document.getElementById('route-data');
         
-        // Pobierz współrzędne z URL
-        const coordFrom = "{{ load[2] }}";
-        const coordTo = "{{ unload[2] }}";
-        
-        // Pobierz kody pocztowe i kraje
-        const loadCountry = "{{ load[0] }}";
-        const loadPostal = "{{ load[1] }}";
-        const unloadCountry = "{{ unload[0] }}";
-        const unloadPostal = "{{ unload[1] }}";
-        
-        // Pobierz opcjonalny transit time
-        const transitTime = "{{ transit_time }}";
-        
-        // Pobierz koszty paliwa i kierowcy
-        const fuelCost = "{{ fuel_cost }}";
-        const driverCost = "{{ driver_cost }}";
-        
-        // Pobierz waypoints jeśli istnieją
-        const waypoints = "{{ waypoints }}";
-        const hasWaypoints = {{ 'true' if has_waypoints else 'false' }};
+        // Pobierz dane z atrybutów data-*
+        const coordFrom = routeData.dataset.coordFrom;
+        const coordTo = routeData.dataset.coordTo;
+        const loadCountry = routeData.dataset.loadCountry;
+        const loadPostal = routeData.dataset.loadPostal;
+        const unloadCountry = routeData.dataset.unloadCountry;
+        const unloadPostal = routeData.dataset.unloadPostal;
+        const transitTime = routeData.dataset.transitTime;
+        const fuelCost = routeData.dataset.fuelCost;
+        const driverCost = routeData.dataset.driverCost;
+        const waypoints = routeData.dataset.waypoints;
+        const hasWaypoints = routeData.dataset.hasWaypoints === 'true';
         
         // Przygotuj URL z parametrami
         let url = `/test_truck_route?coord_from=${coordFrom}&coord_to=${coordTo}&load_country=${loadCountry}&load_postal=${loadPostal}&unload_country=${unloadCountry}&unload_postal=${unloadPostal}`;
@@ -380,8 +398,10 @@
                 resultsContainer.style.display = 'block';
                 
                 // Aktualizuj dane w interfejsie
-                document.getElementById('distance').textContent = `${data.distance} km`;
+                // Używamy road_distance_km (bez promu) dla spójności z process_przetargi
+                document.getElementById('distance').textContent = `${data.road_distance_km} km`;
                 document.getElementById('approach-distance').textContent = data.podlot ? `${data.podlot} km` : '-';
+                document.getElementById('departure-distance').textContent = data.odjazd ? `${data.odjazd} km` : '-';
                 document.getElementById('road-tolls').textContent = `${data.oplaty_drogowe}€`;
                 document.getElementById('other-tolls').textContent = `${data.oplaty_dodatkowe}€`;
                 document.getElementById('tolls-per-km').textContent = `${data.oplaty_na_km}€/km`;
@@ -389,15 +409,17 @@
                 document.getElementById('fuel-cost').textContent = `${data.koszt_paliwa}€`;
                 document.getElementById('driver-cost').textContent = `${data.koszt_kierowcy}€`;
                 document.getElementById('approach-tolls').textContent = `${data.oplaty_drogowe_podlot}€`;
+                document.getElementById('departure-tolls').textContent = data.oplaty_drogowe_odjazd ? `${data.oplaty_drogowe_odjazd}€` : '-';
                 document.getElementById('total-cost').textContent = `${data.suma_kosztow}€`;
+                document.getElementById('total-cost-without-approach').textContent = data.suma_kosztow_bez_podlotu_odjazdu ? `${data.suma_kosztow_bez_podlotu_odjazdu}€` : '-';
                 
                 // Aktualizuj sugerowane frachty
                 document.getElementById('suggested-fracht-historical').textContent = (data.sugerowany_fracht_historyczny && data.sugerowany_fracht_historyczny !== '0') ? `${data.sugerowany_fracht_historyczny}€` : '-';
-                document.getElementById('suggested-fracht-matrix').textContent = `${data.sugerowany_fracht_matrix}€`;
+                document.getElementById('suggested-fracht-matrix').textContent = `${data.suma_kosztow}€`;
                 
-                // Oblicz sugerowaną stawkę wg matrixa
-                const totalDistance = parseFloat(data.distance) + (data.podlot ? parseFloat(data.podlot) : 0);
-                const suggestedRateMatrix = totalDistance > 0 ? (parseFloat(data.sugerowany_fracht_matrix) / totalDistance).toFixed(2) : 0;
+                // Oblicz sugerowaną stawkę wg matrixa (dystans drogowy + podlot + odjazd)
+                const totalDistance = parseFloat(data.road_distance_km) + (data.podlot ? parseFloat(data.podlot) : 0) + (data.odjazd ? parseFloat(data.odjazd) : 0);
+                const suggestedRateMatrix = totalDistance > 0 ? (parseFloat(data.suma_kosztow) / totalDistance).toFixed(2) : 0;
                 document.getElementById('suggested-rate-matrix').textContent = `${suggestedRateMatrix}€/km`;
                 
                 document.getElementById('expected-profit').textContent = `${data.oczekiwany_zysk}€`;

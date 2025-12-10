@@ -395,10 +395,12 @@
                         ${errorMessage}
                     </td>
                     <td>${formatInteger(row['Podlot (km)'])}</td>
+                    <td>${formatInteger(row['Odjazd (km)'])}</td>
                     <td>${formatNumber(row['Koszt paliwa'])}${row['Koszt paliwa'] ? '€' : ''}</td>
                     <td>${formatNumber(row['Opłaty drogowe'])}${row['Opłaty drogowe'] ? '€' : ''}</td>
                     <td>${formatInteger(row['Koszt kierowcy + leasing'])}${row['Koszt kierowcy + leasing'] ? '€' : ''}</td>
                     <td>${formatNumber(row['Koszt podlotu (opłaty + paliwo)'])}${row['Koszt podlotu (opłaty + paliwo)'] ? '€' : ''}</td>
+                    <td>${formatNumber(row['Koszt odjazdu (opłaty + paliwo)'])}${row['Koszt odjazdu (opłaty + paliwo)'] ? '€' : ''}</td>
                     <td>${formatNumber(row['Opłaty/km'])}${row['Opłaty/km'] ? '€/km' : ''}</td>
                     <td style="white-space: pre-line">${row['Opłaty drogowe (szczegóły)'] || '-'}</td>
                     <td>${formatInteger(row['Suma kosztów'])}${row['Suma kosztów'] ? '€' : ''}</td>
@@ -409,7 +411,8 @@
                             </a>` : '-'}
                     </td>
                     <td>${formatSuggestedRate(row)}</td>
-                    <td>${formatInteger(row['Sugerowany fracht wg matrixa'])}${row['Sugerowany fracht wg matrixa'] ? '€' : ''}</td>
+                    <td>${formatNumber(row['Stawka minimalna (€/km)'])}${row['Stawka minimalna (€/km)'] ? '€/km' : ''}</td>
+                    <td>${formatInteger(row['Suma kosztów (bez podlotu i odjazdu)'])}${row['Suma kosztów (bez podlotu i odjazdu)'] ? '€' : ''}</td>
                     <td style="white-space: nowrap;">${formatAllRegionalRates(regionKlientRates)}</td>
                     <td style="white-space: nowrap;">${formatAllRegionalRates(regionGieldaRates)}</td>
                     <td>${formatInteger(row['Oczekiwany zysk'])}${row['Oczekiwany zysk'] ? '€' : ''}</td>

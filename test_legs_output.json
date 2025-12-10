@@ -1,0 +1,44 @@
+{
+  "distance": 1901585,
+  "travelTime": 116990,
+  "trafficDelay": 0,
+  "violated": false,
+  "legs": [
+    {
+      "distance": 1901585,
+      "travelTime": 116990,
+      "trafficDelay": 0,
+      "violated": false
+    }
+  ],
+  "events": [
+    {
+      "latitude": 59.444631437,
+      "longitude": 24.768713491,
+      "distanceFromStart": 1888582,
+      "travelTimeFromStart": 101945,
+      "countryCode": "EE",
+      "utcOffset": 120,
+      "combinedTransport": {
+        "name": "Tallinn-Helsingi",
+        "type": "BOAT",
+        "accessType": "ENTER",
+        "relatedEventIndex": 1
+      }
+    },
+    {
+      "latitude": 60.14953213,
+      "longitude": 24.916423372,
+      "distanceFromStart": 1888582,
+      "travelTimeFromStart": 115616,
+      "countryCode": "FI",
+      "utcOffset": 120,
+      "combinedTransport": {
+        "name": "Tallinn-Helsingi",
+        "type": "BOAT",
+        "accessType": "EXIT",
+        "relatedEventIndex": 0
+      }
+    }
+  ]
+}

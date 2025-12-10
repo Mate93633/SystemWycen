@@ -79,8 +79,8 @@ ISO_CODES = {
 # Globalne zmienne
 PTV_API_KEY = "RVVfZmQ1YTcyY2E4ZjNiNDhmOTlhYjE5NjRmNGZhYTdlNTc6NGUyM2VhMmEtZTc2YS00YmVkLWIyMTMtZDc2YjE0NWZjZjE1"
 DEFAULT_ROUTING_MODE = "FAST"  # Stały tryb wyznaczania trasy
-DEFAULT_FUEL_COST = 0.40  # Domyślny koszt paliwa EUR/km
-DEFAULT_DRIVER_COST = 210  # Domyślny koszt kierowcy EUR/dzień
+DEFAULT_FUEL_COST = 1.1  # Domyślny koszt paliwa EUR/km
+DEFAULT_DRIVER_COST = 0  # Domyślny koszt kierowcy EUR/dzień
 
 # Konfiguracja loggera - zmiana poziomu na ERROR aby ograniczyć logi
 logging.basicConfig(
@@ -204,6 +204,8 @@ class RouteRequest:
         driver_cost: Koszt kierowcy [EUR/dzień]
         matrix_type: Typ matrycy marży ('klient' lub 'targi')
         avoid_switzerland: Czy unikać Szwajcarii
+        avoid_eurotunnel: Czy unikać Eurotunelu (RAIL_SHUTTLES)
+        avoid_serbia: Czy unikać Serbii
         routing_mode: Tryb routingu ('FAST', 'ECO', 'SHORT')
     """
     start: WaypointData
@@ -212,7 +214,9 @@ class RouteRequest:
     fuel_cost: float = DEFAULT_FUEL_COST
     driver_cost: float = DEFAULT_DRIVER_COST
     matrix_type: str = "klient"
-    avoid_switzerland: bool = True
+    avoid_switzerland: bool = False
+    avoid_eurotunnel: bool = True
+    avoid_serbia: bool = True
     routing_mode: str = DEFAULT_ROUTING_MODE
     
     def __post_init__(self):
@@ -312,7 +316,8 @@ COUNTRY_MAPPING = {
     'LT': 'Lithuania', 'Litwa': 'Lithuania',
     'LV': 'Latvia', 'Łotwa': 'Latvia',
     'RO': 'Romania', 'Rumunia': 'Romania',
-    'UK': 'United Kingdom', 'Wielka Brytania': 'United Kingdom',
+    'GB': 'United Kingdom', 'UK': 'United Kingdom', 'Wielka Brytania': 'United Kingdom',
+    'Great Britain': 'United Kingdom', 'England': 'United Kingdom',
     'LU': 'Luxembourg', 'Luksemburg': 'Luxembourg'
 }
 
@@ -344,7 +349,9 @@ COUNTRY_TO_ISO = {
     'LITHUANIA': 'LT', 'LITWA': 'LT',
     'LATVIA': 'LV', 'ŁOTWA': 'LV', 'LOTWA': 'LV',
     'ROMANIA': 'RO', 'RUMUNIA': 'RO',
-    'UNITED KINGDOM': 'UK', 'WIELKA BRYTANIA': 'UK',
+    'UNITED KINGDOM': 'GB', 'WIELKA BRYTANIA': 'GB', 'UK': 'GB', 'GB': 'GB',
+    'GREAT BRITAIN': 'GB', 'ENGLAND': 'GB', 'ANGLIA': 'GB',
+    'SCOTLAND': 'GB', 'SZKOCJA': 'GB', 'WALES': 'GB', 'WALIA': 'GB',
     'LUXEMBOURG': 'LU', 'LUKSEMBURG': 'LU'
 }
 
@@ -1554,10 +1561,17 @@ def calculate_multi_waypoint_route(route_request: RouteRequest):
     logger.info(f"Przygotowanie punktów zakończone: {len(geocoded_coords)} punktów gotowych")
     
     # KROK 2: Wywołanie PTV API z wieloma waypoints
+    # Pobierz kraje startowy i docelowy dla sprawdzenia obowiązkowych promów
+    start_country = route_request.start.country if route_request.start else None
+    end_country = route_request.end.country if route_request.end else None
+    
     ptv_result = ptv_manager.get_route_with_waypoints(
         waypoints=geocoded_coords,
         avoid_switzerland=route_request.avoid_switzerland,
-        routing_mode=route_request.routing_mode
+        avoid_eurotunnel=route_request.avoid_eurotunnel,
+        routing_mode=route_request.routing_mode,
+        country_from=start_country,
+        country_to=end_country
     )
     
     if not ptv_result:
@@ -1589,7 +1603,11 @@ def calculate_multi_waypoint_route(route_request: RouteRequest):
     # KROK 4: Zwróć wyniki
     result = {
         'success': True,
-        'distance': ptv_result.get('distance', 0.0),
+        'distance': ptv_result.get('distance', 0.0),  # Zgodność wsteczna
+        'total_distance_km': ptv_result.get('total_distance_km', ptv_result.get('distance', 0.0)),
+        'road_distance_km': ptv_result.get('road_distance_km', ptv_result.get('distance', 0.0)),
+        'ferry_distance_km': ptv_result.get('ferry_distance_km', 0.0),
+        'ferry_segments': ptv_result.get('ferry_segments', []),
         'legs': legs,
         'segments_info': segments_info,
         'toll_cost': ptv_result.get('toll_cost', 0.0),
@@ -1601,7 +1619,8 @@ def calculate_multi_waypoint_route(route_request: RouteRequest):
     }
     
     logger.info(
-        f"Trasa obliczona pomyślnie: {result['distance']:.1f}km, "
+        f"Trasa obliczona pomyślnie: total={result['total_distance_km']:.1f}km "
+        f"(road={result['road_distance_km']:.1f}km, ferry={result['ferry_distance_km']:.1f}km), "
         f"{len(segments_info)} segmentów, {result['toll_cost']:.2f}€ opłat"
     )
     
@@ -2457,7 +2476,7 @@ def get_podlot(rates, region_rates=None):
         return region_rates.get('region_podlot'), 'regionalny'
     
     # Wartość domyślna
-    return 100, 'domyślny'
+    return 200, 'domyślny'
 
 
 # Globalna zmienna dla macierzy marży
@@ -2797,7 +2816,9 @@ def get_toll_cost(
     loading_country=None, unloading_country=None,
     start_time="2023-08-29T10:00:00.000Z",
     routing_mode=DEFAULT_ROUTING_MODE,
-    avoid_switzerland=True
+    avoid_switzerland=False,
+    avoid_eurotunnel=True,
+    avoid_serbia=True
 ):
     """
     Pobiera koszty drogowe dla trasy między dwoma punktami.
@@ -2808,15 +2829,16 @@ def get_toll_cost(
         if is_route_to_or_from_switzerland(loading_country, unloading_country):
             avoid_switzerland = False
     
-    result = ptv_manager.get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
+    result = ptv_manager.get_route_distance(
+        coord_from, coord_to, 
+        avoid_switzerland, avoid_eurotunnel, routing_mode,
+        country_from=loading_country,
+        country_to=unloading_country,
+        avoid_serbia=avoid_serbia
+    )
     if result and 'toll_cost' in result:
         return result['toll_cost']
     return None
-
-
-def get_route_distance(coord_from, coord_to, avoid_switzerland=True, routing_mode=DEFAULT_ROUTING_MODE):
-    result = ptv_manager.get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
-    return result
 
 
 def verify_city_postal_code_match(country, postal_code, city, threshold_km=100):
@@ -3228,6 +3250,8 @@ def get_all_rates(lc, lp, uc, up, lc_coords, uc_coords):
     # Inicjalizacja wyników
     podlot_hist, z_hist = None, 0
     podlot_gielda, z_gielda = None, 0
+    podlot_source = None  # Źródło podlotu (kod pocztowy lub grupa)
+    odjazd_source = None  # Źródło odjazdu (kod pocztowy lub grupa)
     result = {
         'hist_stawka_3m': None,
         'hist_stawka_6m': None,
@@ -3239,11 +3263,30 @@ def get_all_rates(lc, lp, uc, up, lc_coords, uc_coords):
         'gielda_stawka_12m': None,
         'gielda_stawka_48m': None,
         'gielda_fracht_3m': None,
-        'podlot_historyczny': None,  # Zmieniona nazwa z 'dystans' na 'podlot_historyczny'
+        'podlot_historyczny': None,
+        'podlot_zrodlo': None,  # Informacja o źródle podlotu
+        'odjazd_historyczny': None,
+        'odjazd_zrodlo': None,  # Informacja o źródle odjazdu
         'relacja': f"{norm_lc} {norm_lp} - {norm_uc} {norm_up}",
         'dopasowanie_hist': dopasowanie_hist,
         'dopasowanie_gielda': dopasowanie_gielda
     }
+    
+    # Oblicz podlot historyczny z fallbackiem do grupy koordynatów
+    podlot_hist, podlot_source = calculate_podlot_with_group_fallback(
+        historical_rates_df, norm_lc, norm_lp, min_orders=20
+    )
+    if podlot_hist is not None:
+        result['podlot_historyczny'] = podlot_hist
+        result['podlot_zrodlo'] = podlot_source
+    
+    # Oblicz odjazd historyczny z fallbackiem do grupy koordynatów
+    odjazd_hist, odjazd_source = calculate_odjazd_with_group_fallback(
+        historical_rates_df, norm_uc, norm_up, min_orders=20
+    )
+    if odjazd_hist is not None:
+        result['odjazd_historyczny'] = odjazd_hist
+        result['odjazd_zrodlo'] = odjazd_source
 
     # Przetwarzanie wyników historycznych (średnia ważona, jeśli jest wiele rekordów)
     if not exact_hist.empty:
@@ -3289,15 +3332,6 @@ def get_all_rates(lc, lp, uc, up, lc_coords, uc_coords):
                                 if result_key == 'hist_stawka_3m':
                                     z_hist = total_zlecen
 
-                # Podlot (dawniej dystans) - użyj centralnej funkcji
-                podlot_hist = calculate_podlot_from_data(exact_hist, "podlot historyczny")
-                if podlot_hist is not None:
-                    result['podlot_historyczny'] = podlot_hist
-                    # Liczba rekordów dla podlotu
-                    valid_dist_records = exact_hist.dropna(subset=['dystans'])
-                    if not valid_dist_records.empty:
-                        used_records_count['podlot_historyczny'] = len(valid_dist_records)
-
                 # Informacja o dopasowaniu - zaktualizuj, jeśli część rekordów pominięto
                 if any(count < len(exact_hist) for count in used_records_count.values()):
                     non_empty_counts = ", ".join([f"{key.split('_')[1]}: {count}/{len(exact_hist)}"
@@ -3318,9 +3352,6 @@ def get_all_rates(lc, lp, uc, up, lc_coords, uc_coords):
                 # Jeśli jest tylko jeden rekord, użyj go bezpośrednio
                 row = exact_hist.iloc[0]
                 
-                # Oblicz podlot za pomocą centralnej funkcji
-                podlot_hist = calculate_podlot_from_data(exact_hist, "podlot historyczny")
-                
                 try:
                     z_hist = float(row.get('Liczba zlecen', 0)) if not pd.isna(row.get('Liczba zlecen', 0)) else 0
                 except:
@@ -3332,7 +3363,6 @@ def get_all_rates(lc, lp, uc, up, lc_coords, uc_coords):
                     'hist_stawka_6m': row.get('stawka_6m') if not pd.isna(row.get('stawka_6m')) else None,
                     'hist_stawka_12m': row.get('stawka_12m') if not pd.isna(row.get('stawka_12m')) else None,
                     'hist_fracht_3m': row.get('fracht_3m') if not pd.isna(row.get('fracht_3m')) else None,
-                    'podlot_historyczny': podlot_hist
                 })
         except Exception as e:
             print(f"Błąd przetwarzania danych historycznych: {e}")
@@ -3439,6 +3469,14 @@ def get_all_rates(lc, lp, uc, up, lc_coords, uc_coords):
     weighted_podlot = calculate_weighted_podlot(podlot_hist, z_hist, podlot_gielda, z_gielda)
     if weighted_podlot is not None:
         result['podlot_sredni_wazony'] = weighted_podlot
+
+    # Fallback: jeśli brak podlotu, ustaw domyślne 200 km
+    if result['podlot_historyczny'] is None:
+        result['podlot_historyczny'] = 200
+
+    # Fallback: jeśli brak odjazdu, ustaw domyślne 200 km
+    if result['odjazd_historyczny'] is None:
+        result['odjazd_historyczny'] = 200
 
     return result
 
@@ -3586,34 +3624,62 @@ def decode_polyline(polyline_str):
     except Exception:
         return []
 
-def create_google_maps_link(coord_from, coord_to, polyline_str):
+def create_google_maps_link(coord_from, coord_to, polyline_str, ferry_ports=None):
     """
     Tworzy link do Google Maps z trasą używając punktów pośrednich
+    
+    Args:
+        coord_from: Punkt startowy (lat, lng)
+        coord_to: Punkt końcowy (lat, lng)
+        polyline_str: Zakodowany polyline (może być z separatorem '|' dla tras z promem)
+        ferry_ports: Dict z kluczami 'start' i 'end' zawierającymi współrzędne portów promowych
     """
     if not polyline_str:
         route_logger.info("Brak polyline - tworzę prosty link punkt-punkt")
         return f"https://www.google.com/maps/dir/{coord_from[0]},{coord_from[1]}/{coord_to[0]},{coord_to[1]}"
     
     try:
-        # Dekoduj polyline do listy punktów
-        route_points = decode_polyline(polyline_str)
+        # Sprawdź czy mamy trasę z promem (polyline rozdzielony przez '|')
+        if '|' in polyline_str and ferry_ports:
+            route_logger.info("🚢 Wykryto trasę z promem - dzielę polyline na segmenty")
+            polyline_parts = polyline_str.split('|')
+            
+            # Dekoduj oba segmenty
+            segment1_points = decode_polyline(polyline_parts[0])
+            segment2_points = decode_polyline(polyline_parts[1])
+            
+            # Pobierz próbki z każdego segmentu (po 7 punktów)
+            sampled_segment1 = sample_route_points(segment1_points, 7)
+            sampled_segment2 = sample_route_points(segment2_points, 7)
+            
+            if sampled_segment1 and sampled_segment2:
+                # Połącz: segment1 + port_start + port_end + segment2
+                all_points = (
+                    sampled_segment1[:-1] +  # Segment 1 bez ostatniego punktu
+                    [ferry_ports['start']] +  # Port wyjścia
+                    [ferry_ports['end']] +    # Port przyjścia
+                    sampled_segment2[1:]      # Segment 2 bez pierwszego punktu
+                )
+                
+                route_logger.info(f"📍 Trasa z promem: {len(all_points)} punktów ({len(sampled_segment1)}-1 + 2 porty + {len(sampled_segment2)}-1)")
+                
+                # Twórz link (bez punktu startowego i końcowego w waypoints)
+                waypoints = "/".join(f"{lat},{lng}" for lat, lng in all_points[1:-1])
+                link = f"https://www.google.com/maps/dir/{coord_from[0]},{coord_from[1]}/{waypoints}/{coord_to[0]},{coord_to[1]}"
+                return link
         
-                 # Wybierz 20 reprezentatywnych punktów
+        # Standardowa trasa bez promu
+        route_points = decode_polyline(polyline_str.split('|')[0])  # Weź pierwszy segment jeśli jest '|'
         sampled_points = sample_route_points(route_points, 15)
         
         if not sampled_points:
             route_logger.info("Nie udało się wybrać punktów pośrednich - tworzę prosty link punkt-punkt")
             return f"https://www.google.com/maps/dir/{coord_from[0]},{coord_from[1]}/{coord_to[0]},{coord_to[1]}"
         
-        # Wyświetl punkty pośrednie
-        print("\nPunkty pośrednie na trasie:")
-        for i, point in enumerate(sampled_points):
-            print(f"Punkt {i+1}: {point[0]}, {point[1]}")
-        
         # Twórz link z punktami pośrednimi
         waypoints = "/".join(f"{lat},{lng}" for lat, lng in sampled_points[1:-1])
         link = f"https://www.google.com/maps/dir/{coord_from[0]},{coord_from[1]}/{waypoints}/{coord_to[0]},{coord_to[1]}"
-        print(f"Wygenerowany link z {len(sampled_points)-2} punktami pośrednimi")
+        route_logger.info(f"Wygenerowany link z {len(sampled_points)-2} punktami pośrednimi")
         return link
         
     except Exception as e:
@@ -3664,16 +3730,19 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                     'Kod pocztowy rozładunku',
                     'Dystans (km)',
                     'Podlot (km)',
+                    'Odjazd (km)',
                     'Koszt paliwa',
                     'Opłaty drogowe',
                     'Koszt kierowcy + leasing',
                     'Koszt podlotu (opłaty + paliwo)',
+                    'Koszt odjazdu (opłaty + paliwo)',
                     'Opłaty/km',
                     'Opłaty drogowe (szczegóły)',
                     'Suma kosztów',
                     'Link do mapy',
                     'Sugerowany fracht wg historycznych stawek',
-                    'Sugerowany fracht wg matrixa',
+                    'Stawka minimalna (€/km)',
+                    'Suma kosztów (bez podlotu i odjazdu)',
                     'Oczekiwany zysk',
                     'Transit time (dni)'
                 ],
@@ -3806,11 +3875,19 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                 coords_roz = get_coordinates(uc, up, uc_city)
 
                 if coords_zl and coords_roz and None not in coords_zl[:2] and None not in coords_roz[:2]:
+                    # Konwertuj pełne nazwy krajów na kody ISO dla promów
+                    loading_country_code = COUNTRY_TO_ISO.get(lc.upper()) if lc else None
+                    unloading_country_code = COUNTRY_TO_ISO.get(uc.upper()) if uc else None
+                    
                     route_result = get_route_distance(coords_zl[:2], coords_roz[:2], 
-                                              loading_country=lc, unloading_country=uc,
-                                              avoid_switzerland=True, routing_mode=DEFAULT_ROUTING_MODE)
+                                              loading_country=loading_country_code, unloading_country=unloading_country_code,
+                                              avoid_switzerland=False, avoid_serbia=True, routing_mode=DEFAULT_ROUTING_MODE)
                     if isinstance(route_result, dict):
-                        dist_ptv = route_result.get('distance')
+                        dist_ptv = route_result.get('distance')  # Zgodność wsteczna
+                        total_distance_km = route_result.get('total_distance_km', dist_ptv)
+                        road_distance_km = route_result.get('road_distance_km', dist_ptv)
+                        ferry_distance_km = route_result.get('ferry_distance_km', 0)
+                        ferry_segments = route_result.get('ferry_segments', [])
                         polyline = route_result.get('polyline', '')
                         road_toll = route_result.get('road_toll', 0)  # Standardowe opłaty drogowe
                         other_toll = route_result.get('other_toll', 0)  # Opłaty za tunele/mosty/promy
@@ -3819,6 +3896,10 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                         special_systems = route_result.get('special_systems', [])  # Szczegóły systemów specjalnych
                     else:
                         dist_ptv = route_result
+                        total_distance_km = route_result
+                        road_distance_km = route_result
+                        ferry_distance_km = 0
+                        ferry_segments = []
                         polyline = ''
                         road_toll = 0
                         other_toll = 0
@@ -3827,6 +3908,10 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                         special_systems = []
                 else:
                     dist_ptv = None
+                    total_distance_km = None
+                    road_distance_km = None
+                    ferry_distance_km = 0
+                    ferry_segments = []
                     polyline = ''
                     road_toll = 0
                     other_toll = 0
@@ -3836,7 +3921,8 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
 
             # Tworzenie linku do mapy
             if coords_zl and coords_roz and None not in coords_zl[:2] and None not in coords_roz[:2] and polyline:
-                map_link = create_google_maps_link(coords_zl[:2], coords_roz[:2], polyline)
+                ferry_ports = route_result.get('ferry_ports') if isinstance(route_result, dict) else None
+                map_link = create_google_maps_link(coords_zl[:2], coords_roz[:2], polyline, ferry_ports=ferry_ports)
             else:
                 if coords_zl and coords_roz and None not in coords_zl[:2] and None not in coords_roz[:2]:
                     # Jeśli mamy współrzędne, ale nie mamy polyline, stwórz prosty link
@@ -3844,7 +3930,8 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                 else:
                     map_link = None
 
-            fuel_cost_value = dist_ptv * fuel_cost if dist_ptv is not None else None
+            # WAŻNE: Koszt paliwa oparty na road_distance_km (nie ma paliwa na promach!)
+            fuel_cost_value = road_distance_km * fuel_cost if road_distance_km is not None else None
 
             # Sprawdź czy w wierszu jest zdefiniowana wartość transit time
             transit_time_from_file = get_transit_time_from_row(row)
@@ -3854,8 +3941,8 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                 driver_days = transit_time_from_file
                 print(f"Wiersz {i+1}: Użyto transit time z pliku: {driver_days} dni")
             else:
-                # Oblicz standardowo na podstawie dystansu
-                driver_days = calculate_driver_days(dist_ptv)
+                # Oblicz standardowo na podstawie CAŁKOWITEGO dystansu (z promem)
+                driver_days = calculate_driver_days(total_distance_km)
                 if 'transit time' in row.index:
                     print(f"Wiersz {i+1}: Kolumna transit time pusta - obliczono z dystansu: {driver_days} dni")
                 else:
@@ -3871,10 +3958,13 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
 
             # Zmiana: podlot jest już bezpośrednio dostępny z historycznych danych z fallbackiem do regionów
             podlot, podlot_source = get_podlot(rates, region_rates)
+            
+            # Odjazd - dystans od rozładunku do kolejnego załadunku
+            odjazd, odjazd_source = get_odjazd(rates, region_rates)
 
-            # Oblicz całkowity dystans (PTV + podlot)
-            if dist_ptv is not None:
-                total_distance = dist_ptv + podlot
+            # Oblicz całkowity dystans (road_distance + podlot + odjazd)
+            if road_distance_km is not None:
+                total_distance = road_distance_km + podlot + odjazd
             else:
                 total_distance = None
 
@@ -3882,8 +3972,12 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
             # Stawka: 0.30 EUR/km (opłaty) + fuel_cost EUR/km (paliwo)
             oplaty_drogowe_podlot = calculate_podlot_toll(podlot, fuel_cost_per_km=fuel_cost)
             print(f"Koszt podlotu: {podlot} km × (0.30 + {fuel_cost}) EUR/km = {oplaty_drogowe_podlot} EUR")
+            
+            # Obliczenie całkowitego kosztu odjazdu (opłaty drogowe + paliwo)
+            oplaty_drogowe_odjazd = calculate_odjazd_toll(odjazd, fuel_cost_per_km=fuel_cost)
+            print(f"Koszt odjazdu: {odjazd} km × (0.30 + {fuel_cost}) EUR/km = {oplaty_drogowe_odjazd} EUR")
 
-            suma_kosztow = calculate_total_costs([road_toll, fuel_cost_value, driver_cost_value, oplaty_drogowe_podlot, other_toll])
+            suma_kosztow = calculate_total_costs([road_toll, fuel_cost_value, driver_cost_value, oplaty_drogowe_podlot, oplaty_drogowe_odjazd, other_toll])
 
             # Pobierz regiony dla obliczenia oczekiwanego zysku
             loading_region = get_region(lc, lp)
@@ -3894,10 +3988,17 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                 loading_region, unloading_region, driver_days
             )
             
-            # Oblicz sugerowany fracht wg matrixa: suma kosztów + oczekiwany zysk
-            suggested_fracht_matrix = None
-            if suma_kosztow is not None and expected_profit is not None and driver_days is not None:
-                suggested_fracht_matrix = suma_kosztow + expected_profit
+            # Oblicz sumę kosztów bez podlotu i odjazdu
+            suma_kosztow_bez_podlotu_odjazdu = None
+            if suma_kosztow is not None:
+                podlot_cost = oplaty_drogowe_podlot if oplaty_drogowe_podlot is not None else 0
+                odjazd_cost = oplaty_drogowe_odjazd if oplaty_drogowe_odjazd is not None else 0
+                suma_kosztow_bez_podlotu_odjazdu = suma_kosztow - podlot_cost - odjazd_cost
+            
+            # Oblicz stawkę minimalną (suma kosztów / całkowity dystans z podlotem i odjazdem)
+            stawka_minimalna = None
+            if suma_kosztow is not None and total_distance is not None and total_distance > 0:
+                stawka_minimalna = suma_kosztow / total_distance
 
             lc_lat, lc_lon, lc_jakosc, lc_zrodlo = coords_zl if coords_zl else (None, None, 'nieznane', 'brak danych')
             uc_lat, uc_lon, uc_jakosc, uc_zrodlo = coords_roz if coords_roz else (None, None, 'nieznane', 'brak danych')
@@ -3913,11 +4014,11 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
             gielda_period = best_rates['gielda_period']
             hist_period = best_rates['hist_period']
 
-            # Obliczenie frachtów na podstawie dystansu PTV i dystansu całkowitego
-            gielda_fracht_km_ptv = calculate_fracht(dist_ptv, gielda_rate)
-            gielda_fracht_km_total = calculate_fracht(total_distance, gielda_rate)
-            klient_fracht_km_ptv = calculate_fracht(dist_ptv, hist_rate)
-            klient_fracht_km_total = calculate_fracht(total_distance, hist_rate)
+            # Obliczenie frachtów na podstawie dystansu drogowego (bez promu) + podlot + odjazd
+            gielda_fracht_km_ptv = calculate_fracht(total_distance_km, gielda_rate)  # tylko dystans PTV (z promem)
+            gielda_fracht_km_total = calculate_fracht(total_distance, gielda_rate)   # dystans drogowy + podlot + odjazd
+            klient_fracht_km_ptv = calculate_fracht(total_distance_km, hist_rate)    # tylko dystans PTV (z promem)
+            klient_fracht_km_total = calculate_fracht(total_distance, hist_rate)     # dystans drogowy + podlot + odjazd
 
             gielda_fracht_3m = rates.get('gielda_fracht_3m')
             hist_fracht_3m = rates.get('hist_fracht_3m')
@@ -3952,7 +4053,7 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
             print(f"DEBUG toll_text dla wiersza {i+1}: {toll_text}")
 
             # Oblicz koszt opłat na kilometr (tylko standardowe opłaty drogowe)
-            toll_per_km = calculate_toll_per_km(road_toll, dist_ptv)
+            toll_per_km = calculate_toll_per_km(road_toll, total_distance_km)
             print(f"\nDEBUG - Wartości przed sumowaniem dla wiersza:")
             print(f"fuel_cost_value: {fuel_cost_value} ({type(fuel_cost_value).__name__})")
             print(f"driver_cost_value: {driver_cost_value} ({type(driver_cost_value).__name__})")
@@ -3967,8 +4068,9 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
             print(f"road_toll: {road_toll} ({type(road_toll).__name__})")
             print(f"other_toll: {other_toll} ({type(other_toll).__name__})")
             print(f"oplaty_drogowe_podlot: {oplaty_drogowe_podlot} ({type(oplaty_drogowe_podlot).__name__})")
+            print(f"oplaty_drogowe_odjazd: {oplaty_drogowe_odjazd} ({type(oplaty_drogowe_odjazd).__name__})")
             
-            suma_kosztow = calculate_total_costs([fuel_cost_value, driver_cost_value, road_toll, other_toll, oplaty_drogowe_podlot])
+            suma_kosztow = calculate_total_costs([fuel_cost_value, driver_cost_value, road_toll, other_toll, oplaty_drogowe_podlot, oplaty_drogowe_odjazd])
 
             # Tworzenie preview_row dla udanego przetwarzania
             # Konwertuj wartości NaN na None przed utworzeniem słownika
@@ -3977,12 +4079,14 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                 'Kod pocztowy załadunku': None if pd.isna(lp) else str(lp),
                 'Kraj rozładunku': None if pd.isna(uc) else str(uc),
                 'Kod pocztowy rozładunku': None if pd.isna(up) else str(up),
-                'Dystans (km)': dist_ptv,
+                'Dystans (km)': road_distance_km,
                 'Podlot (km)': podlot,
+                'Odjazd (km)': odjazd,
                 'Koszt paliwa': fuel_cost_value,
                 'Opłaty drogowe': road_toll,
                 'Koszt kierowcy + leasing': driver_cost_value,
                 'Koszt podlotu (opłaty + paliwo)': oplaty_drogowe_podlot,
+                'Koszt odjazdu (opłaty + paliwo)': oplaty_drogowe_odjazd,
                 'Opłaty/km': toll_per_km,
                 'Opłaty drogowe (szczegóły)': toll_text,
                 'Opłaty specjalne': other_toll,
@@ -3991,7 +4095,8 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                 'Sugerowany fracht wg historycznych stawek': klient_fracht_km_total if klient_fracht_km_total is not None else gielda_fracht_km_total,
                 'Sugerowany fracht źródło': 'klient' if klient_fracht_km_total is not None else 'gielda',
                 'Sugerowany fracht okres': hist_period if klient_fracht_km_total is not None else gielda_period,
-                'Sugerowany fracht wg matrixa': suggested_fracht_matrix,
+                'Stawka minimalna (€/km)': stawka_minimalna,
+                'Suma kosztów (bez podlotu i odjazdu)': suma_kosztow_bez_podlotu_odjazdu,
                 'Region - Klient stawka 3m': region_rates.get('region_klient_stawka_3m'),
                 'Region - Klient stawka 6m': region_rates.get('region_klient_stawka_6m'),
                 'Region - Klient stawka 12m': region_rates.get('region_klient_stawka_12m'),
@@ -4000,6 +4105,7 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                 'Region - Giełda stawka 12m': region_rates.get('region_gielda_stawka_12m'),
                 'Region - Podlot (km)': region_rates.get('region_podlot'),
                 'Podlot - źródło': podlot_source,
+                'Odjazd - źródło': odjazd_source,
                 'Oczekiwany zysk': expected_profit,
                 'Transit time (dni)': driver_days
             }
@@ -4027,22 +4133,25 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                 "Miasto rozładunku": uc_city,
                 "Region rozładunku": get_region(uc, up),
                 "Współrzędne rozładunku": uc_coords_str,
-                "km PTV (tylko ładowne)": format_currency(dist_ptv),
-                "km całkowite z podlotem": format_currency(total_distance),
+                "km PTV (tylko ładowne)": format_currency(road_distance_km),
+                "km całkowite z podlotem i odjazdem": format_currency(total_distance),
                 "podlot": format_currency(podlot),
+                "odjazd": format_currency(odjazd),
                 "Transit time (dni)": driver_days,
                 # Zamień link na tekst "Mapa" już na etapie tworzenia DataFrame
                 "Link do mapy": "Mapa" if map_link and isinstance(map_link, str) and map_link.startswith('http') else map_link,
                 # Zapisz oryginalny link w ukrytej kolumnie
                 "_original_map_link": map_link,
-                "Sugerowany fracht wg matrixa": format_currency(suggested_fracht_matrix),
-                "Klient sugerowany fracht/km z podlotem": format_currency(klient_fracht_km_total),
-                "Giełda sugerowany fracht/km z podlotem": format_currency(gielda_fracht_km_total),
+                "Suma kosztów (bez podlotu i odjazdu)": format_currency(suma_kosztow_bez_podlotu_odjazdu),
+                "Stawka minimalna (€/km)": format_currency(stawka_minimalna),
+                "Klient sugerowany fracht/km z podlotem i odjazdem": format_currency(klient_fracht_km_total),
+                "Giełda sugerowany fracht/km z podlotem i odjazdem": format_currency(gielda_fracht_km_total),
                 "Koszt paliwa": format_currency(fuel_cost_value),
                 "Koszt kierowcy + leasing": format_currency(driver_cost_value),
                 "Opłaty drogowe": format_currency(road_toll),
                 "Opłaty specjalne": format_currency(other_toll),
                 "Koszt podlotu (opłaty + paliwo)": format_currency(oplaty_drogowe_podlot),
+                "Koszt odjazdu (opłaty + paliwo)": format_currency(oplaty_drogowe_odjazd),
                 "Opłaty drogowe/km": format_currency(toll_per_km),
                 "Suma kosztów": format_currency(suma_kosztow),
                 "Szczegóły opłat drogowych": toll_text,
@@ -4051,13 +4160,13 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                 "Giełda stawka 6m": format_currency(rates.get('gielda_stawka_6m')),
                 "Giełda stawka 12m": format_currency(rates.get('gielda_stawka_12m')),
                 "Giełda fracht 3m": format_currency(gielda_fracht_3m),
-                "Giełda sugerowany fracht/km PTV": format_currency(gielda_fracht_km_ptv),
+                "Giełda sugerowany fracht/km (z promem)": format_currency(gielda_fracht_km_ptv),
                 "Dopasowanie klient": rates.get('hist_dopasowanie'),
                 "Klient stawka 3m": format_currency(rates.get('hist_stawka_3m')),
                 "Klient stawka 6m": format_currency(rates.get('hist_stawka_6m')),
                 "Klient stawka 12m": format_currency(rates.get('hist_stawka_12m')),
                 "Klient fracht 3m": format_currency(hist_fracht_3m),
-                "Klient sugerowany fracht/km PTV": format_currency(klient_fracht_km_ptv),
+                "Klient sugerowany fracht/km (z promem)": format_currency(klient_fracht_km_ptv),
                 "Weryfikacja załadunku - miasto": verify_load.get('city_name', ''),
                 "Weryfikacja załadunku - kod pocztowy": verify_load.get('postal_name', ''),
                 "Weryfikacja załadunku - współrzędne miasta": city_load_coords,
@@ -4081,6 +4190,7 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                 "Region - Klient stawka 12m": format_currency(region_rates.get('region_klient_stawka_12m')),
                 "Region - Podlot (km)": format_currency(region_rates.get('region_podlot')),
                 "Podlot - źródło": podlot_source,
+                "Odjazd - źródło": odjazd_source,
                 "Oczekiwany zysk": format_currency(expected_profit),
                 "Jakość geokodowania (zał.)": lc_jakosc,
                 "Źródło geokodowania (zał.)": lc_zrodlo,
@@ -4121,17 +4231,19 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                 'Kod pocztowy rozładunku': up,
                 'Dystans (km)': None,
                 'Podlot (km)': None,
+                'Odjazd (km)': None,
                 'Koszt paliwa': None,
                 'Opłaty drogowe': None,
                 'Koszt kierowcy + leasing': None,
                 'Koszt podlotu (opłaty + paliwo)': None,
+                'Koszt odjazdu (opłaty + paliwo)': None,
                 'Opłaty/km': None,
                 'Opłaty drogowe (szczegóły)': None,
                 'Opłaty specjalne': None,
                 'Suma kosztów': None,
                 'Link do mapy': "-",
                 'Sugerowany fracht wg historycznych stawek': None,
-                'Sugerowany fracht wg matrixa': None,
+                'Suma kosztów (bez podlotu i odjazdu)': None,
                 'Region - Klient stawka 3m': None,
                 'Region - Klient stawka 6m': None,
                 'Region - Klient stawka 12m': None,
@@ -4205,18 +4317,46 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                 'marza': 'FFD700'  # Złoty dla kolumn z marżą
             }
 
-            # Mapowanie kolumn do typów (indeksowane od 1)
-            COLUMN_TYPES = {
-                'podstawowe': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],  # A, B, C, G, H, I
-                'geokodowanie': [80],  # D, E, F, J, K, L
-                'dystans': [11, 12, 13, 14, 60, 67],  # M, N, O, P, Q
-                'gielda': [18, 27, 28, 29, 30, 31, 32, 52, 53, 54, 55],  # R-X
-                'klient': [16, 17, 33, 34, 35, 36, 37, 38, 56, 57, 58, 59],  # Y-AE
-                'koszty': [19, 20, 21, 22, 23, 24, 25, 26],  # AF-AL
-                'region': [53, 54, 55],  # AW-BE
-                'weryfikacja': [39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51],  # AM-AV
-                'marza': [62]  # Nowe kolumny z marżą: Oczekiwany zysk, Marża jednostkowa, Dni kierowcy, Źródło marży
+            # Dynamiczne mapowanie kolumn do typów na podstawie nazw
+            # Tworzymy słownik nazwa_kolumny -> indeks (1-based)
+            column_name_to_idx = {col: idx+1 for idx, col in enumerate(result_df.columns)}
+            
+            # Definicje grup kolumn po nazwach
+            COLUMN_GROUPS = {
+                'podstawowe': ['Kraj zaladunku', 'Kod zaladunku', 'Miasto zaladunku', 'Region załadunku', 
+                              'Współrzędne zaladunku', 'Kraj rozladunku', 'Kod rozładunku', 'Miasto rozładunku',
+                              'Region rozładunku', 'Współrzędne rozładunku'],
+                'dystans': ['km PTV (tylko ładowne)', 'km całkowite z podlotem i odjazdem', 'podlot', 'odjazd',
+                           'km w linii prostej'],
+                'gielda': ['Dopasowanie giełda', 'Giełda stawka 3m', 'Giełda stawka 6m', 'Giełda stawka 12m',
+                          'Giełda fracht 3m', 'Giełda sugerowany fracht/km (z promem)', 
+                          'Giełda sugerowany fracht/km z podlotem i odjazdem'],
+                'klient': ['Dopasowanie klient', 'Klient stawka 3m', 'Klient stawka 6m', 'Klient stawka 12m',
+                          'Klient fracht 3m', 'Klient sugerowany fracht/km (z promem)',
+                          'Klient sugerowany fracht/km z podlotem i odjazdem', 'Suma kosztów (bez podlotu i odjazdu)',
+                          'Stawka minimalna (€/km)'],
+                'koszty': ['Koszt paliwa', 'Koszt kierowcy + leasing', 'Opłaty drogowe', 'Opłaty specjalne',
+                          'Koszt podlotu (opłaty + paliwo)', 'Koszt odjazdu (opłaty + paliwo)', 
+                          'Opłaty drogowe/km', 'Suma kosztów'],
+                'region': ['Region - Dopasowanie giełda', 'Region - Giełda stawka 3m', 'Region - Giełda stawka 6m',
+                          'Region - Giełda stawka 12m', 'Region - Dopasowanie klient', 'Region - Klient stawka 3m',
+                          'Region - Klient stawka 6m', 'Region - Klient stawka 12m', 'Region - Podlot (km)'],
+                'weryfikacja': ['Weryfikacja załadunku - miasto', 'Weryfikacja załadunku - kod pocztowy',
+                               'Weryfikacja załadunku - współrzędne miasta', 'Weryfikacja załadunku - współrzędne kodu',
+                               'Weryfikacja załadunku - odległość (km)', 'Weryfikacja załadunku - poprawna',
+                               'Weryfikacja rozładunku - miasto', 'Weryfikacja rozładunku - kod pocztowy',
+                               'Weryfikacja rozładunku - współrzędne miasta', 'Weryfikacja rozładunku - współrzędne kodu',
+                               'Weryfikacja rozładunku - odległość (km)', 'Weryfikacja rozładunku - poprawna',
+                               'Uwagi do geokodowania'],
+                'marza': ['Oczekiwany zysk', 'Źródło marży'],
+                'geokodowanie': ['Jakość geokodowania (zał.)', 'Źródło geokodowania (zał.)',
+                                'Jakość geokodowania (rozł.)', 'Źródło geokodowania (rozł.)']
             }
+            
+            # Konwertuj nazwy kolumn na indeksy
+            COLUMN_TYPES = {}
+            for group_name, column_names in COLUMN_GROUPS.items():
+                COLUMN_TYPES[group_name] = [column_name_to_idx[col] for col in column_names if col in column_name_to_idx]
             
             # Zamień długie linki do map na krótki tekst "Mapa" przed ustawieniem szerokości kolumn
             if "Link do mapy" in result_df.columns:
@@ -4254,12 +4394,26 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                 cell.font = openpyxl.styles.Font(bold=True)
                 cell.alignment = openpyxl.styles.Alignment(horizontal='center', vertical='center', wrap_text=True)
             
-            # Lista kolumn z różnymi formatami
-            distance_columns = [11, 12, 13, 14, 60, 67]  # M, N, O, P, AQ, AU - dystans i odległości weryfikacji
-            percentage_columns = [51]  # R, Y, AY - dopasowanie
-            currency_columns = [16,	17,	18,	19,	20,	21, 22,	23,	24,	25,
-                                28,	29,	30,	31,	32,34, 35, 36,	37,	38,
-                                53,	54,	55,57,	58,	59,62]  # Nowe kolumny: Sugerowany fracht wg matrixa i Oczekiwany zysk
+            # Dynamiczne mapowanie kolumn formatowania na podstawie nazw
+            distance_column_names = ['km PTV (tylko ładowne)', 'km całkowite z podlotem i odjazdem', 'podlot', 'odjazd',
+                                    'km w linii prostej', 'Weryfikacja załadunku - odległość (km)', 
+                                    'Weryfikacja rozładunku - odległość (km)', 'Region - Podlot (km)']
+            currency_column_names = ['Suma kosztów (bez podlotu i odjazdu)', 'Stawka minimalna (€/km)',
+                                    'Klient sugerowany fracht/km z podlotem i odjazdem',
+                                    'Giełda sugerowany fracht/km z podlotem i odjazdem', 'Koszt paliwa', 
+                                    'Koszt kierowcy + leasing', 'Opłaty drogowe', 'Opłaty specjalne',
+                                    'Koszt podlotu (opłaty + paliwo)', 'Koszt odjazdu (opłaty + paliwo)', 
+                                    'Opłaty drogowe/km', 'Suma kosztów',
+                                    'Giełda stawka 3m', 'Giełda stawka 6m', 'Giełda stawka 12m', 'Giełda fracht 3m',
+                                    'Giełda sugerowany fracht/km (z promem)',
+                                    'Klient stawka 3m', 'Klient stawka 6m', 'Klient stawka 12m', 'Klient fracht 3m',
+                                    'Klient sugerowany fracht/km (z promem)',
+                                    'Region - Giełda stawka 3m', 'Region - Giełda stawka 6m', 'Region - Giełda stawka 12m',
+                                    'Region - Klient stawka 3m', 'Region - Klient stawka 6m', 'Region - Klient stawka 12m',
+                                    'Oczekiwany zysk']
+            
+            distance_columns = [column_name_to_idx[col] for col in distance_column_names if col in column_name_to_idx]
+            currency_columns = [column_name_to_idx[col] for col in currency_column_names if col in column_name_to_idx]
             
             # Formatowanie komórek z danymi
             for row_idx, row in enumerate(worksheet.iter_rows(min_row=2)):
@@ -4270,37 +4424,35 @@ def process_przetargi(df, fuel_cost=DEFAULT_FUEL_COST, driver_cost=DEFAULT_DRIVE
                     if isinstance(cell.value, (int, float)):
                         if cell.column in distance_columns:  # Kolumny z kilometrami
                             cell.number_format = '#,##0'
-                        elif cell.column in percentage_columns:  # Kolumny z procentami
-                            cell.number_format = '0.0%'
                         elif cell.column in currency_columns:  # Kolumny z walutą
                             cell.number_format = '#,##0.00 €'
                         else:  # Pozostałe kolumny liczbowe
                             cell.number_format = '#,##0'
                     
                     # Dodaj hiperłącza do komórek z tekstem "Mapa" lub linkami
-                    if cell.column == 15:  # Kolumna z linkami do map (Q)
-                        column_name = list(result_df.columns)[cell.column-1]  # Sprawdź nazwę kolumny
-                        if column_name == "Link do mapy":
-                            # Sprawdź czy komórka zawiera link lub tekst "Mapa"
-                            if cell.value == "Mapa" and original_map_links is not None:
-                                # Pobierz oryginalny link z zapisanej zmiennej
-                                original_link = original_map_links.iloc[row_idx] if row_idx < len(original_map_links) else None
-                                if isinstance(original_link, str) and original_link.startswith('http'):
-                                    # Dodaj hiperłącze
-                                    cell.hyperlink = original_link
-                                    # Ustaw styl hiperłącza
-                                    cell.font = openpyxl.styles.Font(color="0000FF", underline="single")
-                            # Dodatkowe sprawdzenie dla linków, które nie zostały zamienione
-                            elif isinstance(cell.value, str) and cell.value.startswith('http'):
-                                # Zapisz oryginalny link
-                                link_url = cell.value
-                                # Zamień wartość komórki na krótki tekst
-                                cell.value = "Mapa"
+                    # Dynamiczne wyszukiwanie kolumny "Link do mapy" po nazwie
+                    column_name = list(result_df.columns)[cell.column-1] if cell.column <= len(result_df.columns) else None
+                    if column_name == "Link do mapy":
+                        # Sprawdź czy komórka zawiera link lub tekst "Mapa"
+                        if cell.value == "Mapa" and original_map_links is not None:
+                            # Pobierz oryginalny link z zapisanej zmiennej
+                            original_link = original_map_links.iloc[row_idx] if row_idx < len(original_map_links) else None
+                            if isinstance(original_link, str) and original_link.startswith('http'):
                                 # Dodaj hiperłącze
-                                cell.hyperlink = link_url
+                                cell.hyperlink = original_link
                                 # Ustaw styl hiperłącza
                                 cell.font = openpyxl.styles.Font(color="0000FF", underline="single")
-                                print(f"Zamieniono link na 'Mapa' w komórce Excel (wiersz {row_idx+1}, kolumna {cell.column})")
+                        # Dodatkowe sprawdzenie dla linków, które nie zostały zamienione
+                        elif isinstance(cell.value, str) and cell.value.startswith('http'):
+                            # Zapisz oryginalny link
+                            link_url = cell.value
+                            # Zamień wartość komórki na krótki tekst
+                            cell.value = "Mapa"
+                            # Dodaj hiperłącze
+                            cell.hyperlink = link_url
+                            # Ustaw styl hiperłącza
+                            cell.font = openpyxl.styles.Font(color="0000FF", underline="single")
+                            print(f"Zamieniono link na 'Mapa' w komórce Excel (wiersz {row_idx+1}, kolumna {cell.column})")
             
             # Dodaj obramowanie do wszystkich komórek
             thin_border = openpyxl.styles.Border(
@@ -4877,13 +5029,15 @@ def test_route_form():
                     return render_template("error.html", message=error_msg)
                 
                 # Dodatkowe obliczenia (koszt paliwa, kierowcy, marża)
-                fuel_cost_total = result['distance'] * fuel_cost
+                # WAŻNE: Używamy road_distance_km, bo paliwo zużywane jest tylko na drogach (nie na promach)
+                fuel_cost_total = result['road_distance_km'] * fuel_cost
                 
                 # Transit time
                 if transit_time is not None:
                     driver_days = transit_time
                 else:
-                    driver_days = calculate_driver_days(result['distance'])
+                    # Czas jazdy obliczamy na podstawie całkowitego dystansu (włącznie z promem)
+                    driver_days = calculate_driver_days(result['total_distance_km'])
                 
                 driver_cost_total = driver_days * driver_cost if driver_days else 0
                 
@@ -4898,11 +5052,15 @@ def test_route_form():
                 podlot_km, podlot_source = get_podlot(rates, region_rates)
                 podlot_cost = calculate_podlot_toll(podlot_km, fuel_cost_per_km=fuel_cost)
                 
+                odjazd_km, odjazd_source = get_odjazd(rates, region_rates)
+                odjazd_cost = calculate_odjazd_toll(odjazd_km, fuel_cost_per_km=fuel_cost)
+                
                 total_cost = (
                     fuel_cost_total + 
                     result['toll_cost'] + 
                     driver_cost_total + 
-                    podlot_cost
+                    podlot_cost +
+                    odjazd_cost
                 )
                 
                 # Serializuj waypoints do przekazania w URL
@@ -5025,6 +5183,12 @@ def test_truck_route():
     unload_country = request.args.get('unload_country')
     unload_postal = request.args.get('unload_postal')
     
+    # Konwertuj pełne nazwy krajów na kody ISO dla promów (jeśli potrzebne)
+    if load_country:
+        load_country = COUNTRY_TO_ISO.get(load_country.upper(), load_country.upper())
+    if unload_country:
+        unload_country = COUNTRY_TO_ISO.get(unload_country.upper(), unload_country.upper())
+    
     # Pobierz opcjonalny transit time
     transit_time_str = request.args.get('transit_time')
     transit_time = None
@@ -5083,8 +5247,8 @@ def test_truck_route():
             coord_to_tuple = tuple(map(float, coord_to.split(',')))
             
             route_req = RouteRequest(
-                start=WaypointData(coordinates=coord_from_tuple),
-                end=WaypointData(coordinates=coord_to_tuple),
+                start=WaypointData(coordinates=coord_from_tuple, country=load_country),
+                end=WaypointData(coordinates=coord_to_tuple, country=unload_country),
                 waypoints=waypoints_list,
                 fuel_cost=fuel_cost,
                 driver_cost=driver_cost
@@ -5097,7 +5261,11 @@ def test_truck_route():
                 return jsonify({'error': result.get('error_message', 'Błąd obliczania trasy')})
             
             # Dystans i dane trasy
-            dist = result['distance']
+            dist = result['distance']  # Zgodność wsteczna
+            total_distance_km = result['total_distance_km']
+            road_distance_km = result['road_distance_km']
+            ferry_distance_km = result['ferry_distance_km']
+            ferry_segments = result['ferry_segments']
             road_toll = result['road_toll']
             other_toll = result['other_toll']
             total_toll = result['toll_cost']
@@ -5106,38 +5274,44 @@ def test_truck_route():
             segments_info = result['segments_info']
             
             # Oblicz koszty (jak w starym flow)
-            fuel_cost_value = dist * fuel_cost
+            # WAŻNE: Używamy road_distance_km dla paliwa (nie liczymy dystansu na promie)
+            fuel_cost_value = road_distance_km * fuel_cost
             
             if transit_time is not None:
                 driver_days = transit_time
             else:
-                driver_days = calculate_driver_days(dist)
+                # Czas jazdy na podstawie całkowitego dystansu (z promem)
+                driver_days = calculate_driver_days(total_distance_km)
             
             driver_cost_value = driver_days * driver_cost if driver_days else 0
             
-            # Podlot
+            # Podlot i odjazd
             rates = get_all_rates(load_country, load_postal, unload_country, unload_postal, coord_from_tuple, coord_to_tuple)
             region_rates = get_region_based_rates(load_country, load_postal, unload_country, unload_postal)
             podlot, podlot_source = get_podlot(rates, region_rates)
             oplaty_drogowe_podlot = calculate_podlot_toll(podlot, fuel_cost_per_km=fuel_cost)
             
+            odjazd, odjazd_source = get_odjazd(rates, region_rates)
+            oplaty_drogowe_odjazd = calculate_odjazd_toll(odjazd, fuel_cost_per_km=fuel_cost)
+            
             # Suma kosztów
-            suma_kosztow = calculate_total_costs([road_toll, fuel_cost_value, driver_cost_value, other_toll, oplaty_drogowe_podlot])
+            suma_kosztow = calculate_total_costs([road_toll, fuel_cost_value, driver_cost_value, other_toll, oplaty_drogowe_podlot, oplaty_drogowe_odjazd])
             
             # Regiony i stawki (jak w starym flow)
             loading_region = get_region(normalize_country(load_country), load_postal)
             unloading_region = get_region(normalize_country(unload_country), unload_postal)
             
-            driver_days_for_profit = transit_time if transit_time else calculate_driver_days(dist)
+            driver_days_for_profit = transit_time if transit_time else calculate_driver_days(total_distance_km)
             expected_profit, unit_margin, margin_source = calculate_expected_profit(loading_region, unloading_region, driver_days_for_profit)
             
             best_rates = get_best_rates(rates, region_rates)
             hist_rate = best_rates['hist_rate']
             gielda_rate = best_rates['gielda_rate']
             
-            total_distance = dist + podlot
+            # Oblicz całkowity dystans drogowy (bez promu) + podlot + odjazd
+            total_distance = road_distance_km + podlot + odjazd
             
-            # Sugerowane frachty
+            # Sugerowane frachty (na podstawie dystansu drogowego bez promu)
             if hist_rate and total_distance > 0:
                 suggested_fracht_historical = total_distance * hist_rate
             elif gielda_rate and total_distance > 0:
@@ -5145,11 +5319,16 @@ def test_truck_route():
             else:
                 suggested_fracht_historical = None
             
-            suggested_fracht_matrix = suma_kosztow + expected_profit if suma_kosztow and expected_profit else None
+            # Oblicz sumę kosztów bez podlotu i odjazdu
+            suma_kosztow_bez_podlotu_odjazdu = None
+            if suma_kosztow is not None:
+                podlot_cost = oplaty_drogowe_podlot if oplaty_drogowe_podlot is not None else 0
+                odjazd_cost = oplaty_drogowe_odjazd if oplaty_drogowe_odjazd is not None else 0
+                suma_kosztow_bez_podlotu_odjazdu = suma_kosztow - podlot_cost - odjazd_cost
             
             # Format odpowiedzi
             toll_text = format_toll_details(toll_details, road_toll, other_toll, special_systems)
-            toll_per_km = calculate_toll_per_km(road_toll, dist)
+            toll_per_km = calculate_toll_per_km(road_toll, total_distance_km)
             countries = list(toll_details.keys()) if toll_details else []
             
             def safe_value(value):
@@ -5157,19 +5336,26 @@ def test_truck_route():
             
             # Przygotuj odpowiedź z dodatkowymi informacjami o segmentach
             response = {
-                'distance': round(dist, 2),
+                'distance': round(dist, 2),  # Zgodność wsteczna
+                'total_distance_km': round(total_distance_km, 2),
+                'road_distance_km': round(road_distance_km, 2),
+                'ferry_distance_km': round(ferry_distance_km, 2),
+                'ferry_segments': ferry_segments,
                 'polyline': result.get('polyline', ''),
                 'podlot': safe_value(podlot),
                 'podlot_source': podlot_source,
+                'odjazd': safe_value(odjazd),
+                'odjazd_source': odjazd_source,
                 'oplaty_drogowe': safe_value(format_currency(road_toll)),
                 'oplaty_dodatkowe': safe_value(format_currency(other_toll)),
                 'oplaty_na_km': safe_value(format_currency(toll_per_km)),
                 'koszt_paliwa': safe_value(format_currency(fuel_cost_value)),
                 'koszt_kierowcy': safe_value(format_currency(driver_cost_value)),
                 'oplaty_drogowe_podlot': safe_value(format_currency(oplaty_drogowe_podlot)),
+                'oplaty_drogowe_odjazd': safe_value(format_currency(oplaty_drogowe_odjazd)),
                 'suma_kosztow': safe_value(format_currency(suma_kosztow)),
+                'suma_kosztow_bez_podlotu_odjazdu': safe_value(format_currency(suma_kosztow_bez_podlotu_odjazdu)),
                 'sugerowany_fracht_historyczny': safe_value(format_currency(suggested_fracht_historical)),
-                'sugerowany_fracht_matrix': safe_value(format_currency(suggested_fracht_matrix)),
                 'oczekiwany_zysk': safe_value(format_currency(expected_profit)),
                 'marga_jednostkowa': safe_value(format_currency(unit_margin)),
                 'zrodlo_marzy': margin_source,
@@ -5178,7 +5364,12 @@ def test_truck_route():
                 'transit_time_dni': driver_days,
                 'szczegoly_oplat': toll_text,
                 'kraje': countries,
-                'map_link': create_google_maps_link(coord_from_tuple, coord_to_tuple, result.get('polyline', '')),
+                'map_link': create_google_maps_link(
+                    coord_from_tuple, 
+                    coord_to_tuple, 
+                    result.get('polyline', ''),
+                    ferry_ports=result.get('ferry_ports')
+                ),
                 # Regionalne stawki (jak w starym flow - POPRAWIONE KLUCZE)
                 'region_klient_stawka_3m': format_currency(region_rates.get('region_klient_stawka_3m')),
                 'region_klient_stawka_6m': format_currency(region_rates.get('region_klient_stawka_6m')),
@@ -5213,7 +5404,10 @@ def test_truck_route():
         if not result:
             return jsonify({'error': 'Nie udało się wyznaczyć trasy'})
         
-        dist = result.get('distance', 0)
+        dist = result.get('distance', 0)  # Zgodność wsteczna
+        total_distance_km = result.get('total_distance_km', dist)
+        road_distance_km = result.get('road_distance_km', dist)
+        ferry_distance_km = result.get('ferry_distance_km', 0)
         polyline = result.get('polyline', '')
         road_toll = result.get('road_toll', 0)  # Standardowe opłaty drogowe
         other_toll = result.get('other_toll', 0)  # Opłaty za tunele/mosty/promy
@@ -5221,28 +5415,28 @@ def test_truck_route():
         toll_details = result.get('toll_details', {})
         special_systems = result.get('special_systems', [])
         
-        # Obliczanie kosztu paliwa (używa przekazanej wartości)
-        fuel_cost_value = dist * fuel_cost if dist is not None else None
+        # Obliczanie kosztu paliwa (WAŻNE: używa road_distance_km, nie total!)
+        fuel_cost_value = road_distance_km * fuel_cost if road_distance_km is not None else None
         
         # Użyj transit_time jeśli został przekazany, w przeciwnym razie oblicz na podstawie dystansu
         if transit_time is not None:
             driver_days = transit_time
-        elif dist is not None:
-            if dist <= 350:
+        elif total_distance_km is not None:
+            if total_distance_km <= 350:
                 driver_days = 1
-            elif 351 <= dist <= 500:
+            elif 351 <= total_distance_km <= 500:
                 driver_days = 1.25
-            elif 501 <= dist <= 700:
+            elif 501 <= total_distance_km <= 700:
                 driver_days = 1.5
-            elif 701 <= dist <= 1100:
+            elif 701 <= total_distance_km <= 1100:
                 driver_days = 2
-            elif 1101 <= dist <= 1700:
+            elif 1101 <= total_distance_km <= 1700:
                 driver_days = 3
-            elif 1701 <= dist <= 2300:
+            elif 1701 <= total_distance_km <= 2300:
                 driver_days = 4
-            elif 2301 <= dist <= 2900:
+            elif 2301 <= total_distance_km <= 2900:
                 driver_days = 5
-            elif 2901 <= dist <= 3500:
+            elif 2901 <= total_distance_km <= 3500:
                 driver_days = 6
             else:
                 driver_days = None
@@ -5255,13 +5449,14 @@ def test_truck_route():
         toll_text = format_toll_details(toll_details, road_toll, other_toll, special_systems)
         
         # Oblicz koszt opłat na kilometr (tylko standardowe opłaty)
-        toll_per_km = calculate_toll_per_km(road_toll, dist)
+        toll_per_km = calculate_toll_per_km(road_toll, total_distance_km)
         
         # Przygotuj listę krajów
         countries = list(toll_details.keys()) if toll_details else ["Brak informacji o krajach"]
             
         # Stwórz link do mapy
-        map_link = create_google_maps_link(coord_from, coord_to, polyline)
+        ferry_ports = result.get('ferry_ports')
+        map_link = create_google_maps_link(coord_from, coord_to, polyline, ferry_ports=ferry_ports)
         
         # Pobierz stawki regionalne najpierw
         # Jeśli mamy przekazane kody pocztowe i kraje, użyj ich
@@ -5276,17 +5471,21 @@ def test_truck_route():
             unload_postal_fallback = "10115"  # Przykładowy kod pocztowy
             region_rates = get_region_based_rates(load_country_fallback, load_postal_fallback, unload_country_fallback, unload_postal_fallback)
 
-        # Pobierz standardowe stawki i sprawdź czy jest historyczny podlot
+        # Pobierz standardowe stawki i sprawdź czy jest historyczny podlot i odjazd
         rates = get_all_rates(load_country, load_postal, unload_country, unload_postal, coord_from, coord_to)
         
         # Pobierz podlot z danych historycznych z fallbackiem do regionów lub użyj wartości domyślnej  
         podlot, podlot_source = get_podlot(rates, region_rates)
-        
         oplaty_drogowe_podlot = calculate_podlot_toll(podlot, fuel_cost_per_km=fuel_cost)
         print(f"Koszt podlotu: {podlot} km × (0.30 + {fuel_cost}) EUR/km = {oplaty_drogowe_podlot} EUR")
         
+        # Pobierz odjazd z danych historycznych z fallbackiem do regionów lub użyj wartości domyślnej
+        odjazd, odjazd_source = get_odjazd(rates, region_rates)
+        oplaty_drogowe_odjazd = calculate_odjazd_toll(odjazd, fuel_cost_per_km=fuel_cost)
+        print(f"Koszt odjazdu: {odjazd} km × (0.30 + {fuel_cost}) EUR/km = {oplaty_drogowe_odjazd} EUR")
+        
         # Oblicz sumę kosztów
-        suma_kosztow = calculate_total_costs([road_toll, fuel_cost_value, driver_cost_value, other_toll, oplaty_drogowe_podlot])
+        suma_kosztow = calculate_total_costs([road_toll, fuel_cost_value, driver_cost_value, other_toll, oplaty_drogowe_podlot, oplaty_drogowe_odjazd])
         
         # Wykorzystaj istniejącą logikę z process_przetargi - stwórz pojedynczy wiersz danych
         test_row = {
@@ -5294,12 +5493,16 @@ def test_truck_route():
             'Kod pocztowy załadunku': load_postal,
             'Kraj rozładunku': unload_country,
             'Kod pocztowy rozładunku': unload_postal,
-            'Dystans PTV (km)': dist,
+            'Dystans PTV (km)': total_distance_km,  # Całkowity dystans (z promem)
+            'Dystans drogowy (km)': road_distance_km,  # Dystans na kołach
+            'Dystans promowy (km)': ferry_distance_km,  # Dystans morski
             'Podlot (km)': podlot,
+            'Odjazd (km)': odjazd,
             'Opłaty drogowe (€)': road_toll,
             'Koszt paliwa (€)': fuel_cost_value,
             'Koszt kierowcy (€)': driver_cost_value,
             'Opłaty drogowe podlot (€)': oplaty_drogowe_podlot,
+            'Opłaty drogowe odjazd (€)': oplaty_drogowe_odjazd,
             'Inne opłaty (€)': other_toll,
             'Suma kosztów (€)': suma_kosztow
         }
@@ -5311,12 +5514,12 @@ def test_truck_route():
         loading_region = get_region(normalize_country(test_row['Kraj załadunku']), test_row['Kod pocztowy załadunku'])
         unloading_region = get_region(normalize_country(test_row['Kraj rozładunku']), test_row['Kod pocztowy rozładunku'])
         
-        # Oblicz dni kierowcy - użyj przekazanego transit_time lub oblicz na podstawie dystansu
-        distance = test_row.get('Dystans PTV (km)', 0) or 0
+        # Oblicz dni kierowcy - użyj przekazanego transit_time lub oblicz na podstawie dystansu całkowitego (z promem)
+        total_dist_for_transit = test_row.get('Dystans PTV (km)', 0) or 0
         if transit_time is not None:
             driver_days_for_profit = transit_time
         else:
-            driver_days_for_profit = calculate_driver_days(distance)
+            driver_days_for_profit = calculate_driver_days(total_dist_for_transit)
         
         # Oblicz oczekiwany zysk
         expected_profit, unit_margin, margin_source = calculate_expected_profit(
@@ -5328,9 +5531,11 @@ def test_truck_route():
         hist_rate = best_rates['hist_rate']
         gielda_rate = best_rates['gielda_rate']
         
-        total_distance = distance + (test_row.get('Podlot (km)', 0) or 0)
+        # Dystans drogowy (bez promu) + podlot + odjazd dla sugerowanego frachtu
+        road_dist = test_row.get('Dystans drogowy (km)', 0) or 0
+        total_distance = road_dist + (test_row.get('Podlot (km)', 0) or 0) + (test_row.get('Odjazd (km)', 0) or 0)
         
-        # Sugerowany fracht wg historycznych stawek
+        # Sugerowany fracht wg historycznych stawek (na podstawie dystansu drogowego bez promu)
         if hist_rate is not None and total_distance > 0:
             suggested_fracht_historical = total_distance * hist_rate
         elif gielda_rate is not None and total_distance > 0:
@@ -5338,11 +5543,12 @@ def test_truck_route():
         else:
             suggested_fracht_historical = None
             
-        # Sugerowany fracht wg matrixa
-        if suma_kosztow is not None and expected_profit is not None:
-            suggested_fracht_matrix = suma_kosztow + expected_profit
-        else:
-            suggested_fracht_matrix = None
+        # Oblicz sumę kosztów bez podlotu i odjazdu
+        suma_kosztow_bez_podlotu_odjazdu = None
+        if suma_kosztow is not None:
+            podlot_cost = oplaty_drogowe_podlot if oplaty_drogowe_podlot is not None else 0
+            odjazd_cost = oplaty_drogowe_odjazd if oplaty_drogowe_odjazd is not None else 0
+            suma_kosztow_bez_podlotu_odjazdu = suma_kosztow - podlot_cost - odjazd_cost
         
         # Funkcja pomocnicza do konwersji None na 0
         def safe_value(value):
@@ -5350,19 +5556,25 @@ def test_truck_route():
         
         # Przygotuj odpowiedź JSON
         response = {
-            'distance': round(dist, 2),
+            'distance': round(dist, 2),  # Zgodność wsteczna
+            'total_distance_km': round(total_distance_km, 2),
+            'road_distance_km': round(road_distance_km, 2),
+            'ferry_distance_km': round(ferry_distance_km, 2),
             'polyline': polyline,
             'podlot': safe_value(podlot),  # Dodajemy wartość podlotu
             'podlot_source': podlot_source,  # Dodajemy źródło podlotu
+            'odjazd': safe_value(odjazd),  # Dodajemy wartość odjazdu
+            'odjazd_source': odjazd_source,  # Dodajemy źródło odjazdu
             'oplaty_drogowe': safe_value(format_currency(road_toll)),
             'oplaty_dodatkowe': safe_value(format_currency(other_toll)),
             'oplaty_na_km': safe_value(format_currency(toll_per_km)),
             'koszt_paliwa': safe_value(format_currency(fuel_cost_value)),
             'koszt_kierowcy': safe_value(format_currency(driver_cost_value)),
             'oplaty_drogowe_podlot': safe_value(format_currency(oplaty_drogowe_podlot)),
+            'oplaty_drogowe_odjazd': safe_value(format_currency(oplaty_drogowe_odjazd)),
             'suma_kosztow': safe_value(format_currency(suma_kosztow)),
+            'suma_kosztow_bez_podlotu_odjazdu': safe_value(format_currency(suma_kosztow_bez_podlotu_odjazdu)),
             'sugerowany_fracht_historyczny': safe_value(format_currency(suggested_fracht_historical)),
-            'sugerowany_fracht_matrix': safe_value(format_currency(suggested_fracht_matrix)),
             'oczekiwany_zysk': safe_value(format_currency(expected_profit)),
             'marga_jednostkowa': safe_value(format_currency(unit_margin)),
             'transit_time_dni': safe_value(driver_days),
@@ -5406,19 +5618,26 @@ def test_truck_route_map():
         to_coords = [float(x) for x in to_coords.split(',')]
         
         # Pobierz trasę z PTV
-        # Pobierz kraje z parametrów URL
+        # Pobierz kraje z parametrów URL i konwertuj na kody ISO
         load_country = request.args.get('load_country')
         unload_country = request.args.get('unload_country')
         
+        # Konwertuj pełne nazwy krajów na kody ISO dla promów
+        if load_country:
+            load_country = COUNTRY_TO_ISO.get(load_country.upper(), load_country.upper())
+        if unload_country:
+            unload_country = COUNTRY_TO_ISO.get(unload_country.upper(), unload_country.upper())
+        
         route_result = get_route_distance(from_coords, to_coords, 
                                         loading_country=load_country, unloading_country=unload_country,
-                                        avoid_switzerland=True, routing_mode=DEFAULT_ROUTING_MODE)
+                                        avoid_switzerland=False, avoid_serbia=True, routing_mode=DEFAULT_ROUTING_MODE)
         
-        # Wyciągnij polyline z wyniku
+        # Wyciągnij polyline i ferry_ports z wyniku
         polyline = route_result.get('polyline', '') if isinstance(route_result, dict) else ''
+        ferry_ports = route_result.get('ferry_ports') if isinstance(route_result, dict) else None
         
         # Stwórz link do mapy
-        map_link = create_google_maps_link(from_coords, to_coords, polyline)
+        map_link = create_google_maps_link(from_coords, to_coords, polyline, ferry_ports=ferry_ports)
         
         # Przekieruj do Google Maps
         return redirect(map_link)
@@ -5604,13 +5823,19 @@ def is_route_to_or_from_switzerland(loading_country, unloading_country):
     normalized_unloading = normalize_country(unloading_country)
     return normalized_loading == 'Switzerland' or normalized_unloading == 'Switzerland'
 
-def get_route_distance(coord_from, coord_to, loading_country=None, unloading_country=None, avoid_switzerland=True, routing_mode=DEFAULT_ROUTING_MODE):
+def get_route_distance(coord_from, coord_to, loading_country=None, unloading_country=None, avoid_switzerland=False, avoid_eurotunnel=True, avoid_serbia=True, routing_mode=DEFAULT_ROUTING_MODE):
     # Jeśli trasa jest do/ze Szwajcarii, nie unikamy Szwajcarii
     if loading_country and unloading_country:
         if is_route_to_or_from_switzerland(loading_country, unloading_country):
             avoid_switzerland = False
     
-    result = ptv_manager.get_route_distance(coord_from, coord_to, avoid_switzerland, routing_mode)
+    result = ptv_manager.get_route_distance(
+        coord_from, coord_to, 
+        avoid_switzerland, avoid_eurotunnel, routing_mode,
+        country_from=loading_country,
+        country_to=unloading_country,
+        avoid_serbia=avoid_serbia
+    )
     return result
 
 def calculate_podlot_from_data(df, description="podlot"):
@@ -5654,6 +5879,128 @@ def calculate_podlot_from_data(df, description="podlot"):
         print(f"Błąd obliczania {description}: {e}")
         return None
 
+
+def calculate_podlot_with_group_fallback(df_full, norm_lc, norm_lp, min_orders=20):
+    """
+    Oblicza podlot historyczny z fallbackiem do grupy koordynatów.
+    
+    Logika:
+    1. Znajdź rekordy dla kraju + kodu pocztowego załadunku (2 cyfry)
+    2. Jeśli suma zleceń > min_orders: użyj średniej ważonej z tych rekordów
+    3. Jeśli suma zleceń <= min_orders: oblicz średnią ważoną dla całej grupy koordynatów
+    
+    Args:
+        df_full: pełny DataFrame z danymi historycznymi
+        norm_lc: znormalizowany kraj załadunku
+        norm_lp: znormalizowany kod pocztowy załadunku (2 cyfry)
+        min_orders: minimalny próg liczby zleceń (domyślnie 20)
+    
+    Returns:
+        tuple: (podlot_value, source_info) lub (None, None) jeśli brak danych
+    """
+    if df_full.empty or 'dystans' not in df_full.columns:
+        return None, None
+    
+    # Normalizuj kod pocztowy do 2 cyfr
+    norm_lp_2digit = str(norm_lp).zfill(2)[:2]
+    
+    # Krok 1: Znajdź rekordy dla kraju + kodu pocztowego załadunku
+    exact_matches = df_full[
+        (df_full['kraj zaladunku'].apply(normalize_country) == norm_lc) &
+        (df_full['kod pocztowy zaladunku'].astype(str).str.zfill(2).str[:2] == norm_lp_2digit)
+    ]
+    
+    # Filtruj rekordy z niepustymi wartościami dystansu
+    valid_exact = exact_matches.dropna(subset=['dystans'])
+    
+    if valid_exact.empty:
+        return None, None
+    
+    try:
+        # Oblicz sumę zleceń dla dopasowanych rekordów
+        total_orders = 0
+        if 'Liczba zlecen' in valid_exact.columns:
+            total_orders = valid_exact['Liczba zlecen'].fillna(0).sum()
+        
+        # Krok 2: Jeśli suma zleceń > min_orders, użyj tych rekordów
+        if total_orders > min_orders:
+            if total_orders > 0:
+                weights = valid_exact['Liczba zlecen'].fillna(0) / total_orders
+                podlot = (valid_exact['dystans'] * weights).sum()
+            else:
+                podlot = valid_exact['dystans'].mean()
+            
+            source = f"kod pocztowy {norm_lc} {norm_lp_2digit} (n={len(valid_exact)}, zlecenia={int(total_orders)})"
+            return podlot, source
+        
+        # Krok 3: Fallback do grupy koordynatów
+        if 'grupa_koordynatow' not in df_full.columns:
+            # Jeśli brak kolumny grupa_koordynatow, użyj dostępnych danych
+            if total_orders > 0:
+                weights = valid_exact['Liczba zlecen'].fillna(0) / total_orders
+                podlot = (valid_exact['dystans'] * weights).sum()
+            else:
+                podlot = valid_exact['dystans'].mean()
+            source = f"kod pocztowy {norm_lc} {norm_lp_2digit} (n={len(valid_exact)}, zlecenia={int(total_orders)}, brak grupy)"
+            return podlot, source
+        
+        # Znajdź grupę koordynatów dla tego kodu pocztowego
+        grupa = valid_exact['grupa_koordynatow'].dropna().iloc[0] if not valid_exact['grupa_koordynatow'].dropna().empty else None
+        
+        if grupa is None:
+            # Brak przypisanej grupy - użyj dostępnych danych
+            if total_orders > 0:
+                weights = valid_exact['Liczba zlecen'].fillna(0) / total_orders
+                podlot = (valid_exact['dystans'] * weights).sum()
+            else:
+                podlot = valid_exact['dystans'].mean()
+            source = f"kod pocztowy {norm_lc} {norm_lp_2digit} (n={len(valid_exact)}, brak grupy)"
+            return podlot, source
+        
+        # Pobierz wszystkie rekordy z tej samej grupy koordynatów
+        group_matches = df_full[df_full['grupa_koordynatow'] == grupa]
+        valid_group = group_matches.dropna(subset=['dystans'])
+        
+        if valid_group.empty:
+            # Fallback do oryginalnych danych jeśli grupa pusta
+            if total_orders > 0:
+                weights = valid_exact['Liczba zlecen'].fillna(0) / total_orders
+                podlot = (valid_exact['dystans'] * weights).sum()
+            else:
+                podlot = valid_exact['dystans'].mean()
+            source = f"kod pocztowy {norm_lc} {norm_lp_2digit} (n={len(valid_exact)}, grupa pusta)"
+            return podlot, source
+        
+        # Oblicz średnią ważoną dla całej grupy
+        group_total_orders = 0
+        if 'Liczba zlecen' in valid_group.columns:
+            group_total_orders = valid_group['Liczba zlecen'].fillna(0).sum()
+        
+        # Wartość domyślna do uzupełnienia
+        default_value = 200
+        
+        if group_total_orders > 0:
+            weights = valid_group['Liczba zlecen'].fillna(0) / group_total_orders
+            podlot_from_data = (valid_group['dystans'] * weights).sum()
+        else:
+            podlot_from_data = valid_group['dystans'].mean()
+        
+        # Jeśli grupa ma mniej niż min_orders zleceń, uzupełnij brakujące wartością domyślną
+        if group_total_orders < min_orders:
+            missing_orders = min_orders - group_total_orders
+            # Średnia ważona: (dane z grupy * liczba zleceń + domyślna * brakujące) / min_orders
+            podlot = (podlot_from_data * group_total_orders + default_value * missing_orders) / min_orders
+            source = f"grupa {grupa} (n={len(valid_group)}, zlecenia={int(group_total_orders)}, uzupełniono {int(missing_orders)} do {min_orders}, fallback z {norm_lc} {norm_lp_2digit})"
+        else:
+            podlot = podlot_from_data
+            source = f"grupa {grupa} (n={len(valid_group)}, zlecenia={int(group_total_orders)}, fallback z {norm_lc} {norm_lp_2digit})"
+        
+        return podlot, source
+        
+    except Exception as e:
+        print(f"Błąd obliczania podlotu z grupą: {e}")
+        return None, None
+
 def calculate_weighted_podlot(podlot_hist, z_hist, podlot_gielda, z_gielda):
     """
     Oblicza średni podlot ważony liczbą zleceń z różnych źródeł
@@ -5678,6 +6025,186 @@ def calculate_weighted_podlot(podlot_hist, z_hist, podlot_gielda, z_gielda):
         return (hist_value * z_hist + gielda_value * z_gielda) / (z_hist + z_gielda)
     
     return None
+
+
+def calculate_odjazd_with_group_fallback(df_full, norm_uc, norm_up, min_orders=20):
+    """
+    Oblicza odjazd historyczny z fallbackiem do grupy koordynatów.
+    
+    Odjazd to dystans od rozładunku do kolejnego załadunku.
+    
+    Logika:
+    1. Znajdź rekordy dla kraju + kodu pocztowego rozładunku (2 cyfry)
+    2. Jeśli suma zleceń (LICZBA_ZLECEN_ODJAZD) > min_orders: użyj średniej ważonej z tych rekordów
+    3. Jeśli suma zleceń <= min_orders: oblicz średnią ważoną dla całej grupy koordynatów (_KOORDYNATY_ODJAZD)
+    
+    Args:
+        df_full: pełny DataFrame z danymi historycznymi
+        norm_uc: znormalizowany kraj rozładunku
+        norm_up: znormalizowany kod pocztowy rozładunku (2 cyfry)
+        min_orders: minimalny próg liczby zleceń (domyślnie 20)
+    
+    Returns:
+        tuple: (odjazd_value, source_info) lub (None, None) jeśli brak danych
+    """
+    if df_full.empty or 'ODJAZD' not in df_full.columns:
+        return None, None
+    
+    # Normalizuj kod pocztowy do 2 cyfr
+    norm_up_2digit = str(norm_up).zfill(2)[:2]
+    
+    # Krok 1: Znajdź rekordy dla kraju + kodu pocztowego rozładunku
+    exact_matches = df_full[
+        (df_full['kraj rozladunku'].apply(normalize_country) == norm_uc) &
+        (df_full['kod pocztowy rozladunku'].astype(str).str.zfill(2).str[:2] == norm_up_2digit)
+    ]
+    
+    # Filtruj rekordy z niepustymi wartościami odjazdu
+    valid_exact = exact_matches.dropna(subset=['ODJAZD'])
+    
+    if valid_exact.empty:
+        return None, None
+    
+    try:
+        # Oblicz sumę zleceń dla dopasowanych rekordów
+        total_orders = 0
+        if 'LICZBA_ZLECEN_ODJAZD' in valid_exact.columns:
+            total_orders = valid_exact['LICZBA_ZLECEN_ODJAZD'].fillna(0).sum()
+        
+        # Krok 2: Jeśli suma zleceń > min_orders, użyj tych rekordów
+        if total_orders > min_orders:
+            if total_orders > 0:
+                weights = valid_exact['LICZBA_ZLECEN_ODJAZD'].fillna(0) / total_orders
+                odjazd = (valid_exact['ODJAZD'] * weights).sum()
+            else:
+                odjazd = valid_exact['ODJAZD'].mean()
+            
+            source = f"kod pocztowy {norm_uc} {norm_up_2digit} (n={len(valid_exact)}, zlecenia={int(total_orders)})"
+            return odjazd, source
+        
+        # Krok 3: Fallback do grupy koordynatów odjazdu
+        if '_KOORDYNATY_ODJAZD' not in df_full.columns:
+            # Jeśli brak kolumny _KOORDYNATY_ODJAZD, użyj dostępnych danych
+            if total_orders > 0:
+                weights = valid_exact['LICZBA_ZLECEN_ODJAZD'].fillna(0) / total_orders
+                odjazd = (valid_exact['ODJAZD'] * weights).sum()
+            else:
+                odjazd = valid_exact['ODJAZD'].mean()
+            source = f"kod pocztowy {norm_uc} {norm_up_2digit} (n={len(valid_exact)}, zlecenia={int(total_orders)}, brak grupy)"
+            return odjazd, source
+        
+        # Znajdź grupę koordynatów dla tego kodu pocztowego
+        grupa = valid_exact['_KOORDYNATY_ODJAZD'].dropna().iloc[0] if not valid_exact['_KOORDYNATY_ODJAZD'].dropna().empty else None
+        
+        if grupa is None:
+            # Brak przypisanej grupy - użyj dostępnych danych
+            if total_orders > 0:
+                weights = valid_exact['LICZBA_ZLECEN_ODJAZD'].fillna(0) / total_orders
+                odjazd = (valid_exact['ODJAZD'] * weights).sum()
+            else:
+                odjazd = valid_exact['ODJAZD'].mean()
+            source = f"kod pocztowy {norm_uc} {norm_up_2digit} (n={len(valid_exact)}, brak grupy)"
+            return odjazd, source
+        
+        # Pobierz wszystkie rekordy z tej samej grupy koordynatów odjazdu
+        group_matches = df_full[df_full['_KOORDYNATY_ODJAZD'] == grupa]
+        valid_group = group_matches.dropna(subset=['ODJAZD'])
+        
+        if valid_group.empty:
+            # Fallback do oryginalnych danych jeśli grupa pusta
+            if total_orders > 0:
+                weights = valid_exact['LICZBA_ZLECEN_ODJAZD'].fillna(0) / total_orders
+                odjazd = (valid_exact['ODJAZD'] * weights).sum()
+            else:
+                odjazd = valid_exact['ODJAZD'].mean()
+            source = f"kod pocztowy {norm_uc} {norm_up_2digit} (n={len(valid_exact)}, grupa pusta)"
+            return odjazd, source
+        
+        # Oblicz średnią ważoną dla całej grupy
+        group_total_orders = 0
+        if 'LICZBA_ZLECEN_ODJAZD' in valid_group.columns:
+            group_total_orders = valid_group['LICZBA_ZLECEN_ODJAZD'].fillna(0).sum()
+        
+        # Wartość domyślna do uzupełnienia
+        default_value = 200
+        
+        if group_total_orders > 0:
+            weights = valid_group['LICZBA_ZLECEN_ODJAZD'].fillna(0) / group_total_orders
+            odjazd_from_data = (valid_group['ODJAZD'] * weights).sum()
+        else:
+            odjazd_from_data = valid_group['ODJAZD'].mean()
+        
+        # Jeśli grupa ma mniej niż min_orders zleceń, uzupełnij brakujące wartością domyślną
+        if group_total_orders < min_orders:
+            missing_orders = min_orders - group_total_orders
+            # Średnia ważona: (dane z grupy * liczba zleceń + domyślna * brakujące) / min_orders
+            odjazd = (odjazd_from_data * group_total_orders + default_value * missing_orders) / min_orders
+            source = f"grupa {grupa} (n={len(valid_group)}, zlecenia={int(group_total_orders)}, uzupełniono {int(missing_orders)} do {min_orders}, fallback z {norm_uc} {norm_up_2digit})"
+        else:
+            odjazd = odjazd_from_data
+            source = f"grupa {grupa} (n={len(valid_group)}, zlecenia={int(group_total_orders)}, fallback z {norm_uc} {norm_up_2digit})"
+        
+        return odjazd, source
+        
+    except Exception as e:
+        print(f"Błąd obliczania odjazdu z grupą: {e}")
+        return None, None
+
+
+def get_odjazd(rates, region_rates=None):
+    """
+    Pobiera odjazd z danych historycznych z fallbackiem do regionów lub zwraca wartość domyślną 200 km
+    
+    Hierarchia:
+    1. rates.get('odjazd_historyczny') - konkretne dane historyczne
+    2. rates.get('odjazd_sredni_wazony') - średni ważony odjazd
+    3. region_rates.get('region_odjazd') - regionalny odjazd
+    4. 200 km - wartość domyślna
+    
+    Returns:
+        tuple: (odjazd_value, source_info)
+    """
+    # Sprawdź najpierw konkretny odjazd historyczny
+    odjazd = rates.get('odjazd_historyczny')
+    if odjazd is not None:
+        return odjazd, 'historyczny'
+    
+    # Sprawdź średni ważony odjazd
+    odjazd_sredni = rates.get('odjazd_sredni_wazony')
+    if odjazd_sredni is not None:
+        return odjazd_sredni, 'średni ważony'
+    
+    # Sprawdź regionalny odjazd jako fallback
+    if region_rates and region_rates.get('region_odjazd') is not None:
+        return region_rates.get('region_odjazd'), 'regionalny'
+    
+    # Wartość domyślna
+    return 200, 'domyślny'
+
+
+def calculate_odjazd_toll(odjazd, toll_rate_per_km=0.30, fuel_cost_per_km=None):
+    """
+    Oblicza całkowity koszt odjazdu (opłaty drogowe + paliwo)
+    
+    Args:
+        odjazd: Dystans odjazdu w km
+        toll_rate_per_km: Stawka opłat drogowych za km (domyślnie 0.30 EUR/km)
+        fuel_cost_per_km: Stawka paliwa za km (jeśli None, używa DEFAULT_FUEL_COST)
+    
+    Returns:
+        float: Całkowity koszt odjazdu (opłaty + paliwo)
+    """
+    if odjazd is None:
+        return None
+    
+    # Użyj przekazanej stawki paliwa lub domyślnej
+    fuel_rate = fuel_cost_per_km if fuel_cost_per_km is not None else DEFAULT_FUEL_COST
+    
+    # Suma stawek za km
+    total_rate_per_km = toll_rate_per_km + fuel_rate
+    
+    return odjazd * total_rate_per_km
+
 
 @app.route("/geocoding_progress")
 def geocoding_progress():
