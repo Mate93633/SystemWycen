@@ -3696,12 +3696,6 @@ logging.basicConfig(
     ]
 )
 
-# Dodanie filtra postępu do loggera
-class FilterProgress(logging.Filter):
-    def filter(self, record):
-        return not record.getMessage().startswith("Progress:")
-
-
 # === DUPLIKACJA ZMIENNYCH GLOBALNYCH USUNIĘTA ===
 # Wszystkie dane sesji znajdują się teraz w SessionManager
 # === KONIEC ===
