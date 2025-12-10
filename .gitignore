@@ -1,38 +1,79 @@
-# Pliki OSRM - duże pliki danych
-osrm/
-*.osm.pbf
-*.osrm
-*.osrm.*
-
-# Pliki cache i tymczasowe
-*_cache/
-*.cache
-*.tmp
-
-# Środowisko wirtualne Python
-venv/
-env/
-.venv/
-
-# Pliki kompilowane Python
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Pliki logów
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv/
+
+# Logi
 *.log
 logs/
 
-# Pliki IDE
+# Cache aplikacji
+geo_cache/
+route_cache/
+locations_cache/
+*.joblib
+
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# Pliki systemu operacyjnego
+# Pliki tymczasowe
+*.tmp
+*.temp
+*.bak
+
+# Pliki Excel tymczasowe
+~$*.xlsx
+*.xlsx.tmp
+
+# Node.js (jeśli przypadkowo dodane)
+node_modules/
+package-lock.json
+
+# Zmienne środowiskowe
+.env
+.env.local
+.env.*.local
+
+# System operacyjny
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
-# Pliki tymczasowe Excel
-~$*.xlsx
-~$*.xls 
+# Pliki testowe (generowane podczas testów)
+test_*.json
+api_response_*.json
+
+# Pliki wynikowe Excel (generowane przez aplikację)
+wyniki_*.xlsx
+output_*.xlsx

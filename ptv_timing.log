@@ -1,7 +1,0 @@
-2025-06-20 17:24:34,240 - WARNING -  * Debugger is active!
-2025-06-20 17:24:34,243 - INFO -  * Debugger PIN: 824-134-642
-2025-06-20 17:24:34,323 - INFO - 192.168.0.52 - - [20/Jun/2025 17:24:34] "GET / HTTP/1.1" 200 -
-2025-06-20 17:24:38,357 - INFO - 192.168.0.52 - - [20/Jun/2025 17:24:38] "POST / HTTP/1.1" 200 -
-2025-06-20 17:24:38,431 - INFO - PTV API: Wysy³am zapytanie: '10150, Poland' z filtrem2025-06-20 17:25:21,561 - INFO -  * Restarting with stat
-wrócony kod pocztowy (10-150) nie zgadza siê z szukanym (10150)
-2025-06-20 17:25:21,372 - INFO -  * Detected change in 'C:\\Users\\Mateusz.Bartosik\\PycharmProjects\\Wyceny\\appGPT.py', reloading
