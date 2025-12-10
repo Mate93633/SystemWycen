@@ -7,19 +7,39 @@ import requests
 import logging
 import traceback
 
+# =============================================================================
+# Import danych promów z modułu konfiguracji
+# Dane zostały wydzielone do app/config/ferry_data.py dla lepszej organizacji
+# =============================================================================
+from app.config.ferry_data import (
+    FERRY_COSTS,
+    FERRY_SEA_DISTANCES,
+    MANDATORY_FERRY_ROUTES,
+    UK_HGV_LEVY_DAILY_EUR,
+    is_ferry_mandatory,
+    get_best_ferry_for_countries,
+    get_ferry_cost,
+    get_ferry_sea_distance,
+)
+
 # Konfiguracja loggera - zmiana poziomu na DEBUG aby pokazać wszystkie logi
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 DEFAULT_ROUTING_MODE = "FAST"
 
+# =============================================================================
+# UWAGA: Poniższe definicje są NADPISANE przez import z app/config/ferry_data.py
+# Pozostawione jako backup/dokumentacja. Docelowo do usunięcia.
+# =============================================================================
+
 # UK HGV Road User Levy - dzienna winieta dla ciężarówek >38t, Euro VI (w EUR)
 # Źródło: UK Government HGV Levy rates 2024/2025 - £9.69/dzień ≈ 11€
-UK_HGV_LEVY_DAILY_EUR = 11.0
+_OLD_UK_HGV_LEVY_DAILY_EUR = 11.0
 
 # Koszty promów (w EUR) - na podstawie faktycznych danych z promy.csv (2024/2025)
 # Ceny dla ciężarówek 40t - zaktualizowane na podstawie historii przejazdów
-FERRY_COSTS = {
+_OLD_FERRY_COSTS = {
     # Kanał La Manche
     'Dover-Calais': 190,
     'Calais-Dover': 190,
@@ -141,7 +161,7 @@ FERRY_COSTS = {
 
 # Dystanse morskie promów (w km) - używane do odróżnienia dystansu "na kołach" od dystansu na promie
 # Wartości są przybliżone na podstawie rzeczywistych tras morskich
-FERRY_SEA_DISTANCES = {
+_OLD_FERRY_SEA_DISTANCES = {
     # Kanał La Manche
     'Dover-Calais': 42,
     'Calais-Dover': 42,
@@ -261,7 +281,7 @@ FERRY_SEA_DISTANCES = {
 
 
 
-MANDATORY_FERRY_ROUTES = {
+_OLD_MANDATORY_FERRY_ROUTES = {
 
     # =========================================================================
     # BULGARIA
@@ -949,43 +969,27 @@ MANDATORY_FERRY_ROUTES = {
 }
 
 
-def is_ferry_mandatory(country_from: str, country_to: str) -> bool:
-    """
-    Sprawdza czy dla danej pary krajów prom jest obowiązkowy.
-    
-    Args:
-        country_from: Kod kraju początkowego (np. 'GR', 'IT', 'GB')
-        country_to: Kod kraju docelowego
-        
-    Returns:
-        True jeśli prom jest obowiązkowy dla tej pary krajów
-    """
+# =============================================================================
+# UWAGA: Funkcje is_ferry_mandatory() i get_best_ferry_for_countries()
+# są teraz importowane z app/config/ferry_data.py
+# Poniższe stare definicje pozostawione jako backup (z prefiksem _OLD_)
+# =============================================================================
+
+def _OLD_is_ferry_mandatory(country_from: str, country_to: str) -> bool:
+    """STARA WERSJA - używaj is_ferry_mandatory z importu"""
     if not country_from or not country_to:
         return False
-    
     country_from = country_from.upper()
     country_to = country_to.upper()
-    
-    return (country_from, country_to) in MANDATORY_FERRY_ROUTES
+    return (country_from, country_to) in _OLD_MANDATORY_FERRY_ROUTES
 
-def get_best_ferry_for_countries(country_from: str, country_to: str):
-    """
-    Zwraca zdefiniowany prom dla pary krajów.
-    
-    Args:
-        country_from: Kod kraju początkowego
-        country_to: Kod kraju docelowego
-        
-    Returns:
-        Słownik z informacjami o promie lub None
-    """
+def _OLD_get_best_ferry_for_countries(country_from: str, country_to: str):
+    """STARA WERSJA - używaj get_best_ferry_for_countries z importu"""
     if not country_from or not country_to:
         return None
-    
     country_from = country_from.upper()
     country_to = country_to.upper()
-    
-    return MANDATORY_FERRY_ROUTES.get((country_from, country_to))
+    return _OLD_MANDATORY_FERRY_ROUTES.get((country_from, country_to))
 
 
 class PTVRequestQueue:
