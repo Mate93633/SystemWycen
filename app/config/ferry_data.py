@@ -956,6 +956,23 @@ MANDATORY_FERRY_ROUTES: Dict[Tuple[str, str], FerryRouteInfo] = {
         'duration_hours': 2.5,
         'operator': 'Tallink Silja / Viking Line / Eckerö Line'
     },
+
+    ('FI', 'DE'): {
+        'name': 'Helsinki-Tallinn',
+        'start': (60.1699, 24.9384),
+        'end': (59.4370, 24.7536),
+        'cost': 380.0,
+        'duration_hours': 2.5,
+        'operator': 'Tallink Silja / Viking Line / Eckerö Line'
+    },
+    ('DE', 'FI'): {
+        'name': 'Tallinn-Helsinki',
+        'start': (59.4370, 24.7536),
+        'end': (60.1699, 24.9384),
+        'cost': 380.0,
+        'duration_hours': 2.5,
+        'operator': 'Tallink Silja / Viking Line / Eckerö Line'
+    },
 }
 
 
