@@ -47,36 +47,49 @@ from user_session_data import UserSessionData
 # ============================================================================
 # Konfiguracja - stałe i ustawienia
 from app.config.settings import (
-    PTV_API_KEY as CONFIG_PTV_API_KEY,
-    DEFAULT_ROUTING_MODE as CONFIG_DEFAULT_ROUTING_MODE,
-    DEFAULT_FUEL_COST as CONFIG_DEFAULT_FUEL_COST,
-    DEFAULT_DRIVER_COST as CONFIG_DEFAULT_DRIVER_COST,
+    PTV_API_KEY,
+    DEFAULT_ROUTING_MODE,
+    DEFAULT_FUEL_COST,
+    DEFAULT_DRIVER_COST,
 )
 
-# Mapowania krajów
+# Mapowania krajów - używamy bezpośrednio z modułu
 from app.config.countries import (
-    ISO_CODES as CONFIG_ISO_CODES,
-    COUNTRY_MAPPING as CONFIG_COUNTRY_MAPPING,
-    COUNTRY_TO_ISO as CONFIG_COUNTRY_TO_ISO,
-    normalize_country as config_normalize_country,
+    ISO_CODES,
+    COUNTRY_MAPPING,
+    COUNTRY_TO_ISO,
+    normalize_country,
 )
 
-# Modele danych
+# Modele danych - wyjątki
 from app.models.exceptions import (
-    GeocodeException as ModelGeocodeException,
-    LocationVerificationRequired as ModelLocationVerificationRequired,
+    GeocodeException,
+    LocationVerificationRequired,
+)
+
+# Modele danych - dataclasses dla tras
+from app.models.waypoint import (
+    WaypointData,
+    RouteRequest,
+)
+
+# Dane regionów
+from app.config.regions import (
+    REGION_DATA_RAW,
+    parse_region_data,
+    get_region_for_location,
 )
 
 # Funkcje pomocnicze
 from app.utils.formatting import (
-    safe_float as util_safe_float,
-    format_currency as util_format_currency,
-    format_coordinates as util_format_coordinates,
-    clean_text as util_clean_text,
-    select_best_rate as util_select_best_rate,
-    calculate_fracht as util_calculate_fracht,
+    safe_float,
+    format_currency,
+    format_coordinates,
+    clean_text,
+    select_best_rate,
+    calculate_fracht,
 )
-from app.utils.geo import haversine as util_haversine
+from app.utils.geo import haversine
 
 # Blokada dla bezpiecznej aktualizacji zmiennych globalnych (używana przez starszy kod)
 # TODO: Stopniowo usunąć po pełnej migracji do SessionManager
@@ -88,35 +101,8 @@ LOOKUP_DICT = {}
 # Nowa zmienna globalna - słownik mapujący (kod kraju, kod pocztowy) -> region
 REGION_MAPPING = {}
 
-# Słownik kodów ISO krajów
-ISO_CODES = {
-    "Poland": "pl",
-    "Germany": "de",
-    "France": "fr",
-    "Italy": "it",
-    "Spain": "es",
-    "Netherlands": "nl",
-    "Belgium": "be",
-    "Czech Republic": "cz",
-    "Austria": "at",
-    "Slovakia": "sk",
-    "Slovenia": "si",
-    "Hungary": "hu",
-    "Portugal": "pt",
-    "Greece": "gr",
-    "Switzerland": "ch",
-    "Sweden": "se",
-    "Finland": "fi",
-    "Norway": "no",
-    "Denmark": "dk",
-    "Luxembourg": "lu"
-}
-
-# Globalne zmienne
-PTV_API_KEY = "RVVfZmQ1YTcyY2E4ZjNiNDhmOTlhYjE5NjRmNGZhYTdlNTc6NGUyM2VhMmEtZTc2YS00YmVkLWIyMTMtZDc2YjE0NWZjZjE1"
-DEFAULT_ROUTING_MODE = "FAST"  # Stały tryb wyznaczania trasy
-DEFAULT_FUEL_COST = 1.1  # Domyślny koszt paliwa EUR/km
-DEFAULT_DRIVER_COST = 0  # Domyślny koszt kierowcy EUR/dzień
+# Stałe ISO_CODES, PTV_API_KEY, DEFAULT_ROUTING_MODE, DEFAULT_FUEL_COST, DEFAULT_DRIVER_COST
+# są teraz importowane z app.config.settings i app.config.countries
 
 # Konfiguracja loggera - zmiana poziomu na ERROR aby ograniczyć logi
 logging.basicConfig(
@@ -136,155 +122,7 @@ logging.getLogger('urllib3').setLevel(logging.ERROR)
 # ============================================================================
 # DATACLASSES - Modele danych dla tras z punktami pośrednimi
 # ============================================================================
-
-@dataclass
-class WaypointData:
-    """
-    Reprezentacja pojedynczego punktu na trasie.
-    
-    Może być utworzony na dwa sposoby:
-    1. Kraj + kod pocztowy (+ opcjonalnie miasto) - wymaga geokodowania
-    2. Bezpośrednio współrzędne - bez geokodowania
-    
-    Attributes:
-        country: Kod kraju (ISO 2-letter, np. 'PL') lub None dla koordynat
-        postal_code: Kod pocztowy (min 2 cyfry) lub None dla koordynat
-        city: Nazwa miasta (opcjonalne)
-        coordinates: Współrzędne (lat, lon) - podane bezpośrednio lub po geokodowaniu
-    """
-    country: Optional[str] = None
-    postal_code: Optional[str] = None
-    city: Optional[str] = None
-    coordinates: Optional[Tuple[float, float]] = None
-    
-    def __post_init__(self):
-        """Walidacja i normalizacja danych wejściowych"""
-        # Scenariusz 1: Koordynaty bezpośrednie
-        if self.coordinates and len(self.coordinates) == 2:
-            # Walidacja koordynat
-            lat, lon = self.coordinates
-            if not (-90 <= lat <= 90):
-                raise ValueError(f"Nieprawidłowa szerokość geograficzna: {lat} (musi być -90 do 90)")
-            if not (-180 <= lon <= 180):
-                raise ValueError(f"Nieprawidłowa długość geograficzna: {lon} (musi być -180 do 180)")
-            # Koordynaty OK, country/postal mogą być None
-            return
-        
-        # Scenariusz 2: Kraj + kod pocztowy (wymaga geokodowania)
-        if not self.country or not self.postal_code:
-            raise ValueError("WaypointData wymaga albo coordinates albo (country + postal_code)")
-        
-        # Normalizacja
-        self.country = self.country.upper().strip()
-        self.postal_code = self.postal_code.strip()
-        
-        # Konwersja pełnej nazwy kraju na kod ISO (np. "GERMANY" -> "DE")
-        if len(self.country) > 2:
-            iso_code = COUNTRY_TO_ISO.get(self.country)
-            if iso_code:
-                self.country = iso_code
-            else:
-                raise ValueError(f"Nieznana nazwa kraju: '{self.country}'. Użyj kodu ISO (np. DE) lub pełnej nazwy (np. GERMANY)")
-        
-        # Walidacja kodu kraju (2 litery)
-        if len(self.country) != 2 or not self.country.isalpha():
-            raise ValueError(f"Kod kraju musi mieć 2 litery (ISO 3166-1): '{self.country}'")
-        
-        # Walidacja kodu pocztowego (min 2 znaki)
-        if len(self.postal_code) < 2:
-            raise ValueError(f"Kod pocztowy musi mieć minimum 2 znaki: '{self.postal_code}'")
-        
-        # Normalizacja miasta (handle NaN from pandas)
-        if self.city:
-            # Sprawdź czy to nie jest NaN/None/float
-            if isinstance(self.city, str):
-                self.city = self.city.strip()
-                if not self.city:  # Pusta string po strip
-                    self.city = None
-            else:
-                # NaN, float, lub inny typ - ustaw None
-                self.city = None
-    
-    def is_geocoded(self) -> bool:
-        """Sprawdza czy punkt ma przypisane współrzędne"""
-        return self.coordinates is not None and len(self.coordinates) == 2
-    
-    def needs_geocoding(self) -> bool:
-        """Sprawdza czy punkt wymaga geokodowania"""
-        return not self.is_geocoded() and self.country and self.postal_code
-    
-    def __str__(self) -> str:
-        """String representation dla logowania"""
-        if self.is_geocoded() and not self.country:
-            # Tylko koordynaty
-            return f"Coords({self.coordinates[0]:.4f}, {self.coordinates[1]:.4f})"
-        elif self.country and self.postal_code:
-            # Kraj + kod
-            city_str = f" ({self.city})" if self.city else ""
-            coords_str = f" [{self.coordinates[0]:.4f}, {self.coordinates[1]:.4f}]" if self.is_geocoded() else ""
-            return f"{self.country} {self.postal_code}{city_str}{coords_str}"
-        else:
-            return "WaypointData(invalid)"
-
-
-@dataclass
-class RouteRequest:
-    """
-    Żądanie obliczenia trasy z punktami pośrednimi.
-    
-    Attributes:
-        start: Punkt startowy
-        end: Punkt końcowy
-        waypoints: Lista punktów pośrednich (0-5)
-        fuel_cost: Koszt paliwa [EUR/km]
-        driver_cost: Koszt kierowcy [EUR/dzień]
-        matrix_type: Typ matrycy marży ('klient' lub 'targi')
-        avoid_switzerland: Czy unikać Szwajcarii
-        avoid_eurotunnel: Czy unikać Eurotunelu (RAIL_SHUTTLES)
-        avoid_serbia: Czy unikać Serbii
-        routing_mode: Tryb routingu ('FAST', 'ECO', 'SHORT')
-    """
-    start: WaypointData
-    end: WaypointData
-    waypoints: List[WaypointData] = field(default_factory=list)
-    fuel_cost: float = DEFAULT_FUEL_COST
-    driver_cost: float = DEFAULT_DRIVER_COST
-    matrix_type: str = "klient"
-    avoid_switzerland: bool = False
-    avoid_eurotunnel: bool = True
-    avoid_serbia: bool = True
-    routing_mode: str = DEFAULT_ROUTING_MODE
-    
-    def __post_init__(self):
-        """Walidacja danych"""
-        if len(self.waypoints) > 5:
-            raise ValueError("Maksymalnie 5 punktów pośrednich dozwolone")
-        
-        if self.fuel_cost < 0 or self.fuel_cost > 5:
-            raise ValueError("Koszt paliwa musi być w zakresie 0-5 EUR/km")
-        
-        if self.driver_cost < 0 or self.driver_cost > 1000:
-            raise ValueError("Koszt kierowcy musi być w zakresie 0-1000 EUR/dzień")
-        
-        if self.matrix_type not in ['klient', 'targi']:
-            raise ValueError("matrix_type musi być 'klient' lub 'targi'")
-    
-    def get_all_points_ordered(self) -> List[WaypointData]:
-        """Zwraca wszystkie punkty w kolejności: start → waypoints → end"""
-        return [self.start] + self.waypoints + [self.end]
-    
-    def total_waypoints_count(self) -> int:
-        """Liczba wszystkich punktów włączając start i end"""
-        return 2 + len(self.waypoints)
-    
-    def has_waypoints(self) -> bool:
-        """Czy trasa zawiera punkty pośrednie"""
-        return len(self.waypoints) > 0
-    
-    def __str__(self) -> str:
-        """String representation dla logowania"""
-        points_str = " → ".join(str(p) for p in self.get_all_points_ordered())
-        return f"Route[{self.total_waypoints_count()} points]: {points_str}"
+# Klasy WaypointData i RouteRequest są teraz importowane z app.models.waypoint
 
 
 # ============================================================================
@@ -323,729 +161,34 @@ GEOCODING_CURRENT = 0
 # Inicjalizacja SessionManager - zarządzanie sesjami użytkowników
 session_manager = SessionManager(max_age_hours=24)
 
-# Mapowanie krajów – ujednolicone nazwy
-COUNTRY_MAPPING = {
-    # Kody ISO -> pełne nazwy
-    'PL': 'Poland', 'Polska': 'Poland',
-    'DE': 'Germany', 'Niemcy': 'Germany',
-    'FR': 'France', 'Francja': 'France',
-    'IT': 'Italy', 'Włochy': 'Italy',
-    'ES': 'Spain', 'Hiszpania': 'Spain',
-    'NL': 'Netherlands', 'Holandia': 'Netherlands',
-    'BE': 'Belgium', 'Belgia': 'Belgium',
-    'CZ': 'Czech Republic', 'Czechy': 'Czech Republic',
-    'AT': 'Austria', 'Austria': 'Austria',
-    'SK': 'Slovakia', 'Słowacja': 'Slovakia',
-    'SI': 'Slovenia', 'Słowenia': 'Slovenia',
-    'HU': 'Hungary', 'Węgry': 'Hungary',
-    'PT': 'Portugal', 'Portugalia': 'Portugal',
-    'GR': 'Greece', 'Grecja': 'Greece',
-    'CH': 'Switzerland', 'Szwajcaria': 'Switzerland',
-    'SE': 'Sweden', 'Szwecja': 'Sweden',
-    'FI': 'Finland', 'Finlandia': 'Finland',
-    'NO': 'Norway', 'Norwegia': 'Norway',
-    'DK': 'Denmark', 'Dania': 'Denmark',
-    'BG': 'Bulgaria', 'Bułgaria': 'Bulgaria',
-    'EE': 'Estonia', 'Estonia': 'Estonia',
-    'HR': 'Croatia', 'Chorwacja': 'Croatia',
-    'IE': 'Ireland', 'Irlandia': 'Ireland',
-    'LT': 'Lithuania', 'Litwa': 'Lithuania',
-    'LV': 'Latvia', 'Łotwa': 'Latvia',
-    'RO': 'Romania', 'Rumunia': 'Romania',
-    'GB': 'United Kingdom', 'UK': 'United Kingdom', 'Wielka Brytania': 'United Kingdom',
-    'Great Britain': 'United Kingdom', 'England': 'United Kingdom',
-    'LU': 'Luxembourg', 'Luksemburg': 'Luxembourg'
-}
-
-# Mapowanie pełnych nazw krajów -> kody ISO (dla waypoints)
-COUNTRY_TO_ISO = {
-    'POLAND': 'PL', 'POLSKA': 'PL',
-    'GERMANY': 'DE', 'NIEMCY': 'DE',
-    'FRANCE': 'FR', 'FRANCJA': 'FR',
-    'ITALY': 'IT', 'WŁOCHY': 'IT', 'WLOCHY': 'IT',
-    'SPAIN': 'ES', 'HISZPANIA': 'ES',
-    'NETHERLANDS': 'NL', 'HOLANDIA': 'NL',
-    'BELGIUM': 'BE', 'BELGIA': 'BE',
-    'CZECH REPUBLIC': 'CZ', 'CZECHY': 'CZ',
-    'AUSTRIA': 'AT',
-    'SLOVAKIA': 'SK', 'SŁOWACJA': 'SK', 'SLOWACJA': 'SK',
-    'SLOVENIA': 'SI', 'SŁOWENIA': 'SI', 'SLOWENIA': 'SI',
-    'HUNGARY': 'HU', 'WĘGRY': 'HU', 'WEGRY': 'HU',
-    'PORTUGAL': 'PT', 'PORTUGALIA': 'PT',
-    'GREECE': 'GR', 'GRECJA': 'GR',
-    'SWITZERLAND': 'CH', 'SZWAJCARIA': 'CH',
-    'SWEDEN': 'SE', 'SZWECJA': 'SE',
-    'FINLAND': 'FI', 'FINLANDIA': 'FI',
-    'NORWAY': 'NO', 'NORWEGIA': 'NO',
-    'DENMARK': 'DK', 'DANIA': 'DK',
-    'BULGARIA': 'BG', 'BUŁGARIA': 'BG', 'BULGARIA': 'BG',
-    'ESTONIA': 'EE',
-    'CROATIA': 'HR', 'CHORWACJA': 'HR',
-    'IRELAND': 'IE', 'IRLANDIA': 'IE',
-    'LITHUANIA': 'LT', 'LITWA': 'LT',
-    'LATVIA': 'LV', 'ŁOTWA': 'LV', 'LOTWA': 'LV',
-    'ROMANIA': 'RO', 'RUMUNIA': 'RO',
-    'UNITED KINGDOM': 'GB', 'WIELKA BRYTANIA': 'GB', 'UK': 'GB', 'GB': 'GB',
-    'GREAT BRITAIN': 'GB', 'ENGLAND': 'GB', 'ANGLIA': 'GB',
-    'SCOTLAND': 'GB', 'SZKOCJA': 'GB', 'WALES': 'GB', 'WALIA': 'GB',
-    'LUXEMBOURG': 'LU', 'LUKSEMBURG': 'LU'
-}
-
-# Definicja wyjątku
-class GeocodeException(Exception):
-    """Wyjątek sygnalizujący potrzebę ręcznego geokodowania."""
-
-    def __init__(self, ungeocoded_locations):
-        self.ungeocoded_locations = ungeocoded_locations
-        super().__init__("Znaleziono nierozpoznane lokalizacje")
-
-
-class LocationVerificationRequired(Exception):
-    """Wyjątek sygnalizujący potrzebę weryfikacji lokalizacji przez użytkownika."""
-
-    def __init__(self, locations_to_verify):
-        self.locations_to_verify = locations_to_verify
-        super().__init__("Znaleziono lokalizacje wymagające weryfikacji")
-
-
-def normalize_country(country):
-    return COUNTRY_MAPPING.get(str(country).strip(), str(country).strip())
+# Mapowanie krajów (COUNTRY_MAPPING, COUNTRY_TO_ISO) i funkcja normalize_country
+# są teraz importowane z app.config.countries
+#
+# Wyjątki (GeocodeException, LocationVerificationRequired) 
+# są teraz importowane z app.models.exceptions
 
 
 # Funkcja wczytująca mapowania regionów
 def load_region_mapping():
-    global REGION_MAPPING
-
-    region_data = """ 
-    ('10', 'AT', 'AT WSCHÓD'),
-('11', 'AT', 'AT WSCHÓD'),
-('12', 'AT', 'AT WSCHÓD'),
-('13', 'AT', 'AT WSCHÓD'),
-('14', 'AT', 'AT WSCHÓD'),
-('15', 'AT', 'AT WSCHÓD'),
-('16', 'AT', 'AT WSCHÓD'),
-('17', 'AT', 'AT WSCHÓD'),
-('18', 'AT', 'AT WSCHÓD'),
-('19', 'AT', 'AT WSCHÓD'),
-('20', 'AT', 'AT WSCHÓD'),
-('21', 'AT', 'AT WSCHÓD'),
-('22', 'AT', 'AT WSCHÓD'),
-('23', 'AT', 'AT WSCHÓD'),
-('24', 'AT', 'AT WSCHÓD'),
-('25', 'AT', 'AT WSCHÓD'),
-('26', 'AT', 'AT WSCHÓD'),
-('27', 'AT', 'AT WSCHÓD'),
-('28', 'AT', 'AT WSCHÓD'),
-('29', 'AT', 'AT WSCHÓD'),
-('30', 'AT', 'AT WSCHÓD'),
-('31', 'AT', 'AT WSCHÓD'),
-('32', 'AT', 'AT WSCHÓD'),
-('33', 'AT', 'AT WSCHÓD'),
-('34', 'AT', 'AT WSCHÓD'),
-('35', 'AT', 'AT WSCHÓD'),
-('36', 'AT', 'AT WSCHÓD'),
-('37', 'AT', 'AT WSCHÓD'),
-('38', 'AT', 'AT WSCHÓD'),
-('39', 'AT', 'AT WSCHÓD'),
-('40', 'AT', 'AT WSCHÓD'),
-('41', 'AT', 'AT WSCHÓD'),
-('42', 'AT', 'AT WSCHÓD'),
-('43', 'AT', 'AT WSCHÓD'),
-('44', 'AT', 'AT WSCHÓD'),
-('45', 'AT', 'AT WSCHÓD'),
-('46', 'AT', 'AT WSCHÓD'),
-('47', 'AT', 'AT WSCHÓD'),
-('48', 'AT', 'AT WSCHÓD'),
-('49', 'AT', 'AT WSCHÓD'),
-('50', 'AT', 'AT WSCHÓD'),
-('51', 'AT', 'AT WSCHÓD'),
-('52', 'AT', 'AT WSCHÓD'),
-('53', 'AT', 'AT WSCHÓD'),
-('54', 'AT', 'AT WSCHÓD'),
-('55', 'AT', 'AT WSCHÓD'),
-('56', 'AT', 'AT WSCHÓD'),
-('57', 'AT', 'AT WSCHÓD'),
-('58', 'AT', 'AT WSCHÓD'),
-('59', 'AT', 'AT WSCHÓD'),
-('60', 'AT', 'AT ZACHÓD'),
-('61', 'AT', 'AT ZACHÓD'),
-('62', 'AT', 'AT ZACHÓD'),
-('63', 'AT', 'AT ZACHÓD'),
-('64', 'AT', 'AT ZACHÓD'),
-('65', 'AT', 'AT ZACHÓD'),
-('66', 'AT', 'AT ZACHÓD'),
-('67', 'AT', 'AT ZACHÓD'),
-('68', 'AT', 'AT ZACHÓD'),
-('69', 'AT', 'AT ZACHÓD'),
-('70', 'AT', 'AT WSCHÓD'),
-('71', 'AT', 'AT WSCHÓD'),
-('72', 'AT', 'AT WSCHÓD'),
-('73', 'AT', 'AT WSCHÓD'),
-('74', 'AT', 'AT WSCHÓD'),
-('75', 'AT', 'AT WSCHÓD'),
-('76', 'AT', 'AT WSCHÓD'),
-('77', 'AT', 'AT WSCHÓD'),
-('78', 'AT', 'AT WSCHÓD'),
-('79', 'AT', 'AT WSCHÓD'),
-('80', 'AT', 'AT WSCHÓD'),
-('81', 'AT', 'AT WSCHÓD'),
-('82', 'AT', 'AT WSCHÓD'),
-('83', 'AT', 'AT WSCHÓD'),
-('84', 'AT', 'AT WSCHÓD'),
-('85', 'AT', 'AT WSCHÓD'),
-('86', 'AT', 'AT WSCHÓD'),
-('87', 'AT', 'AT WSCHÓD'),
-('88', 'AT', 'AT WSCHÓD'),
-('89', 'AT', 'AT WSCHÓD'),
-('90', 'AT', 'AT WSCHÓD'),
-('91', 'AT', 'AT WSCHÓD'),
-('92', 'AT', 'AT WSCHÓD'),
-('93', 'AT', 'AT WSCHÓD'),
-('94', 'AT', 'AT WSCHÓD'),
-('95', 'AT', 'AT WSCHÓD'),
-('96', 'AT', 'AT WSCHÓD'),
-('97', 'AT', 'AT WSCHÓD'),
-('98', 'AT', 'AT WSCHÓD'),
-('99', 'AT', 'AT WSCHÓD'),
-('', 'BE', 'BE'),
-('', 'BG', 'BG'),
-('', 'CH', 'CH'),
-('10', 'CZ', 'CZ PÓŁNOC'),
-('11', 'CZ', 'CZ PÓŁNOC'),
-('12', 'CZ', 'CZ PÓŁNOC'),
-('13', 'CZ', 'CZ PÓŁNOC'),
-('14', 'CZ', 'CZ PÓŁNOC'),
-('15', 'CZ', 'CZ PÓŁNOC'),
-('16', 'CZ', 'CZ PÓŁNOC'),
-('17', 'CZ', 'CZ PÓŁNOC'),
-('18', 'CZ', 'CZ PÓŁNOC'),
-('19', 'CZ', 'CZ PÓŁNOC'),
-('20', 'CZ', 'CZ PÓŁNOC'),
-('21', 'CZ', 'CZ PÓŁNOC'),
-('22', 'CZ', 'CZ PÓŁNOC'),
-('23', 'CZ', 'CZ PÓŁNOC'),
-('24', 'CZ', 'CZ PÓŁNOC'),
-('25', 'CZ', 'CZ PÓŁNOC'),
-('26', 'CZ', 'CZ PÓŁNOC'),
-('27', 'CZ', 'CZ PÓŁNOC'),
-('28', 'CZ', 'CZ PÓŁNOC'),
-('29', 'CZ', 'CZ PÓŁNOC'),
-('30', 'CZ', 'CZ PÓŁNOC'),
-('31', 'CZ', 'CZ PÓŁNOC'),
-('32', 'CZ', 'CZ PÓŁNOC'),
-('33', 'CZ', 'CZ PÓŁNOC'),
-('34', 'CZ', 'CZ PÓŁNOC'),
-('35', 'CZ', 'CZ PÓŁNOC'),
-('36', 'CZ', 'CZ PÓŁNOC'),
-('37', 'CZ', 'CZ POŁUDNIE'),
-('38', 'CZ', 'CZ POŁUDNIE'),
-('39', 'CZ', 'CZ PÓŁNOC'),
-('40', 'CZ', 'CZ PÓŁNOC'),
-('41', 'CZ', 'CZ PÓŁNOC'),
-('42', 'CZ', 'CZ PÓŁNOC'),
-('43', 'CZ', 'CZ PÓŁNOC'),
-('44', 'CZ', 'CZ PÓŁNOC'),
-('45', 'CZ', 'CZ PÓŁNOC'),
-('46', 'CZ', 'CZ PÓŁNOC'),
-('47', 'CZ', 'CZ PÓŁNOC'),
-('48', 'CZ', 'CZ PÓŁNOC'),
-('49', 'CZ', 'CZ PÓŁNOC'),
-('50', 'CZ', 'CZ PÓŁNOC'),
-('51', 'CZ', 'CZ PÓŁNOC'),
-('52', 'CZ', 'CZ PÓŁNOC'),
-('53', 'CZ', 'CZ PÓŁNOC'),
-('54', 'CZ', 'CZ PÓŁNOC'),
-('55', 'CZ', 'CZ PÓŁNOC'),
-('56', 'CZ', 'CZ PÓŁNOC'),
-('57', 'CZ', 'CZ PÓŁNOC'),
-('58', 'CZ', 'CZ PÓŁNOC'),
-('59', 'CZ', 'CZ PÓŁNOC'),
-('60', 'CZ', 'CZ PÓŁNOC'),
-('61', 'CZ', 'CZ PÓŁNOC'),
-('62', 'CZ', 'CZ PÓŁNOC'),
-('63', 'CZ', 'CZ PÓŁNOC'),
-('64', 'CZ', 'CZ PÓŁNOC'),
-('65', 'CZ', 'CZ PÓŁNOC'),
-('66', 'CZ', 'CZ POŁUDNIE'),
-('67', 'CZ', 'CZ POŁUDNIE'),
-('68', 'CZ', 'CZ POŁUDNIE'),
-('69', 'CZ', 'CZ POŁUDNIE'),
-('70', 'CZ', 'CZ PÓŁNOC'),
-('71', 'CZ', 'CZ PÓŁNOC'),
-('72', 'CZ', 'CZ PÓŁNOC'),
-('73', 'CZ', 'CZ PÓŁNOC'),
-('74', 'CZ', 'CZ PÓŁNOC'),
-('75', 'CZ', 'CZ PÓŁNOC'),
-('76', 'CZ', 'CZ POŁUDNIE'),
-('77', 'CZ', 'CZ POŁUDNIE'),
-('78', 'CZ', 'CZ POŁUDNIE'),
-('79', 'CZ', 'CZ POŁUDNIE'),
-('01', 'DE', 'DE0'),
-('02', 'DE', 'DE0'),
-('03', 'DE', 'DE0'),
-('04', 'DE', 'DE0'),
-('05', 'DE', 'DE0'),
-('06', 'DE', 'DE0'),
-('07', 'DE', 'DE0'),
-('08', 'DE', 'DE0'),
-('09', 'DE', 'DE0'),
-('10', 'DE', 'DE1 POŁUDNIE'),
-('11', 'DE', 'DE1 POŁUDNIE'),
-('12', 'DE', 'DE1 POŁUDNIE'),
-('13', 'DE', 'DE1 POŁUDNIE'),
-('14', 'DE', 'DE1 POŁUDNIE'),
-('15', 'DE', 'DE1 POŁUDNIE'),
-('16', 'DE', 'DE1 POŁUDNIE'),
-('17', 'DE', 'DE1 PÓŁNOC'),
-('18', 'DE', 'DE1 PÓŁNOC'),
-('19', 'DE', 'DE1 PÓŁNOC'),
-('20', 'DE', 'DE2 POŁUDNIE'),
-('21', 'DE', 'DE2 POŁUDNIE'),
-('22', 'DE', 'DE2 POŁUDNIE'),
-('23', 'DE', 'DE2 PÓŁNOC'),
-('24', 'DE', 'DE2 PÓŁNOC'),
-('25', 'DE', 'DE2 PÓŁNOC'),
-('26', 'DE', 'DE2 POŁUDNIE'),
-('27', 'DE', 'DE2 POŁUDNIE'),
-('28', 'DE', 'DE2 POŁUDNIE'),
-('29', 'DE', 'DE2 POŁUDNIE'),
-('30', 'DE', 'DE3'),
-('31', 'DE', 'DE3'),
-('32', 'DE', 'DE3'),
-('33', 'DE', 'DE3'),
-('34', 'DE', 'DE3'),
-('35', 'DE', 'DE3'),
-('36', 'DE', 'DE3'),
-('37', 'DE', 'DE3'),
-('38', 'DE', 'DE3'),
-('39', 'DE', 'DE3'),
-('40', 'DE', 'DE4'),
-('41', 'DE', 'DE4'),
-('42', 'DE', 'DE4'),
-('43', 'DE', 'DE4'),
-('44', 'DE', 'DE4'),
-('45', 'DE', 'DE4'),
-('46', 'DE', 'DE4'),
-('47', 'DE', 'DE4'),
-('48', 'DE', 'DE4'),
-('49', 'DE', 'DE4'),
-('50', 'DE', 'DE5'),
-('51', 'DE', 'DE5'),
-('52', 'DE', 'DE5'),
-('53', 'DE', 'DE5'),
-('54', 'DE', 'DE5'),
-('55', 'DE', 'DE5'),
-('56', 'DE', 'DE5'),
-('57', 'DE', 'DE5'),
-('58', 'DE', 'DE5'),
-('59', 'DE', 'DE5'),
-('60', 'DE', 'DE6'),
-('61', 'DE', 'DE6'),
-('62', 'DE', 'DE6'),
-('63', 'DE', 'DE6'),
-('64', 'DE', 'DE6'),
-('65', 'DE', 'DE6'),
-('66', 'DE', 'DE6'),
-('67', 'DE', 'DE6'),
-('68', 'DE', 'DE6'),
-('69', 'DE', 'DE6'),
-('70', 'DE', 'DE7 PÓŁNOC'),
-('71', 'DE', 'DE7 PÓŁNOC'),
-('72', 'DE', 'DE7 PÓŁNOC'),
-('73', 'DE', 'DE7 PÓŁNOC'),
-('74', 'DE', 'DE7 PÓŁNOC'),
-('75', 'DE', 'DE7 PÓŁNOC'),
-('76', 'DE', 'DE7 PÓŁNOC'),
-('77', 'DE', 'DE7 POŁUDNIE'),
-('78', 'DE', 'DE7 POŁUDNIE'),
-('79', 'DE', 'DE7 POŁUDNIE'),
-('80', 'DE', 'DE8 PÓŁNOC'),
-('81', 'DE', 'DE8 PÓŁNOC'),
-('82', 'DE', 'DE8 PÓŁNOC'),
-('83', 'DE', 'DE8 POŁUDNIE'),
-('84', 'DE', 'DE8 PÓŁNOC'),
-('85', 'DE', 'DE8 PÓŁNOC'),
-('86', 'DE', 'DE8 PÓŁNOC'),
-('87', 'DE', 'DE8 POŁUDNIE'),
-('88', 'DE', 'DE8 POŁUDNIE'),
-('89', 'DE', 'DE8 PÓŁNOC'),
-('90', 'DE', 'DE9 PÓŁNOC'),
-('91', 'DE', 'DE9 PÓŁNOC'),
-('92', 'DE', 'DE9 PÓŁNOC'),
-('93', 'DE', 'DE9 POŁUDNIE'),
-('94', 'DE', 'DE9 POŁUDNIE'),
-('95', 'DE', 'DE9 PÓŁNOC'),
-('96', 'DE', 'DE9 PÓŁNOC'),
-('97', 'DE', 'DE9 PÓŁNOC'),
-('98', 'DE', 'DE9 PÓŁNOC'),
-('99', 'DE', 'DE9 PÓŁNOC'),
-('', 'DK', 'DK'),
-('', 'EE', 'EE'),
-('01', 'ES', 'ES PÓŁNOC'),
-('02', 'ES', 'ES CENTRUM'),
-('03', 'ES', 'ES POŁUDNIE'),
-('04', 'ES', 'ES POŁUDNIE'),
-('05', 'ES', 'ES CENTRUM'),
-('06', 'ES', 'ES POŁUDNIE'),
-('08', 'ES', 'ES PÓŁNOC'),
-('09', 'ES', 'ES PÓŁNOC'),
-('10', 'ES', 'ES POŁUDNIE'),
-('11', 'ES', 'ES POŁUDNIE'),
-('12', 'ES', 'ES CENTRUM'),
-('13', 'ES', 'ES CENTRUM'),
-('14', 'ES', 'ES POŁUDNIE'),
-('15', 'ES', 'ES POŁUDNIE'),
-('16', 'ES', 'ES CENTRUM'),
-('17', 'ES', 'ES PÓŁNOC'),
-('18', 'ES', 'ES POŁUDNIE'),
-('19', 'ES', 'ES CENTRUM'),
-('20', 'ES', 'ES PÓŁNOC'),
-('21', 'ES', 'ES POŁUDNIE'),
-('22', 'ES', 'ES PÓŁNOC'),
-('23', 'ES', 'ES POŁUDNIE'),
-('24', 'ES', 'ES PÓŁNOC'),
-('25', 'ES', 'ES PÓŁNOC'),
-('26', 'ES', 'ES PÓŁNOC'),
-('27', 'ES', 'ES POŁUDNIE'),
-('28', 'ES', 'ES CENTRUM'),
-('29', 'ES', 'ES POŁUDNIE'),
-('30', 'ES', 'ES POŁUDNIE'),
-('31', 'ES', 'ES PÓŁNOC'),
-('32', 'ES', 'ES POŁUDNIE'),
-('33', 'ES', 'ES PÓŁNOC'),
-('34', 'ES', 'ES PÓŁNOC'),
-('35', 'ES', 'ES POŁUDNIE'),
-('36', 'ES', 'ES POŁUDNIE'),
-('37', 'ES', 'ES POŁUDNIE'),
-('38', 'ES', 'ES POŁUDNIE'),
-('39', 'ES', 'ES PÓŁNOC'),
-('40', 'ES', 'ES CENTRUM'),
-('41', 'ES', 'ES POŁUDNIE'),
-('42', 'ES', 'ES PÓŁNOC'),
-('43', 'ES', 'ES PÓŁNOC'),
-('44', 'ES', 'ES CENTRUM'),
-('45', 'ES', 'ES CENTRUM'),
-('46', 'ES', 'ES CENTRUM'),
-('47', 'ES', 'ES CENTRUM'),
-('48', 'ES', 'ES PÓŁNOC'),
-('49', 'ES', 'ES POŁUDNIE'),
-('50', 'ES', 'ES PÓŁNOC'),
-('52', 'ES', 'ES POŁUDNIE'),
-('', 'FI', 'FI'),
-('01', 'FR', 'FR WSCHÓD'),
-('02', 'FR', 'FR PÓŁNOC'),
-('03', 'FR', 'FR WSCHÓD'),
-('04', 'FR', 'FR POŁUDNIE'),
-('05', 'FR', 'FR WSCHÓD'),
-('06', 'FR', 'FR POŁUDNIE'),
-('07', 'FR', 'FR WSCHÓD'),
-('08', 'FR', 'FR PÓŁNOC'),
-('09', 'FR', 'FR POŁUDNIE'),
-('10', 'FR', 'FR WSCHÓD'),
-('11', 'FR', 'FR POŁUDNIE'),
-('12', 'FR', 'FR POŁUDNIE'),
-('13', 'FR', 'FR POŁUDNIE'),
-('14', 'FR', 'FR ZACHÓD'),
-('15', 'FR', 'FR WSCHÓD'),
-('16', 'FR', 'FR ZACHÓD'),
-('17', 'FR', 'FR ZACHÓD'),
-('18', 'FR', 'FR CENTRUM'),
-('19', 'FR', 'FR ZACHÓD'),
-('20', 'FR', 'FR POŁUDNIE'),
-('21', 'FR', 'FR WSCHÓD'),
-('22', 'FR', 'FR ZACHÓD'),
-('23', 'FR', 'FR ZACHÓD'),
-('24', 'FR', 'FR ZACHÓD'),
-('25', 'FR', 'FR WSCHÓD'),
-('26', 'FR', 'FR WSCHÓD'),
-('27', 'FR', 'FR ZACHÓD'),
-('28', 'FR', 'FR CENTRUM'),
-('29', 'FR', 'FR ZACHÓD'),
-('30', 'FR', 'FR POŁUDNIE'),
-('31', 'FR', 'FR POŁUDNIE'),
-('32', 'FR', 'FR POŁUDNIE'),
-('33', 'FR', 'FR ZACHÓD'),
-('34', 'FR', 'FR POŁUDNIE'),
-('35', 'FR', 'FR ZACHÓD'),
-('36', 'FR', 'FR CENTRUM'),
-('37', 'FR', 'FR CENTRUM'),
-('38', 'FR', 'FR WSCHÓD'),
-('39', 'FR', 'FR WSCHÓD'),
-('40', 'FR', 'FR POŁUDNIE'),
-('41', 'FR', 'FR CENTRUM'),
-('42', 'FR', 'FR WSCHÓD'),
-('43', 'FR', 'FR WSCHÓD'),
-('44', 'FR', 'FR ZACHÓD'),
-('45', 'FR', 'FR CENTRUM'),
-('46', 'FR', 'FR POŁUDNIE'),
-('47', 'FR', 'FR POŁUDNIE'),
-('48', 'FR', 'FR POŁUDNIE'),
-('49', 'FR', 'FR ZACHÓD'),
-('50', 'FR', 'FR ZACHÓD'),
-('51', 'FR', 'FR PÓŁNOC'),
-('52', 'FR', 'FR WSCHÓD'),
-('53', 'FR', 'FR ZACHÓD'),
-('54', 'FR', 'FR PÓŁNOC'),
-('55', 'FR', 'FR PÓŁNOC'),
-('56', 'FR', 'FR ZACHÓD'),
-('57', 'FR', 'FR PÓŁNOC'),
-('58', 'FR', 'FR CENTRUM'),
-('59', 'FR', 'FR PÓŁNOC'),
-('60', 'FR', 'FR PÓŁNOC'),
-('61', 'FR', 'FR ZACHÓD'),
-('62', 'FR', 'FR PÓŁNOC'),
-('63', 'FR', 'FR WSCHÓD'),
-('64', 'FR', 'FR POŁUDNIE'),
-('65', 'FR', 'FR POŁUDNIE'),
-('66', 'FR', 'FR POŁUDNIE'),
-('67', 'FR', 'FR WSCHÓD'),
-('68', 'FR', 'FR WSCHÓD'),
-('69', 'FR', 'FR WSCHÓD'),
-('70', 'FR', 'FR WSCHÓD'),
-('71', 'FR', 'FR WSCHÓD'),
-('72', 'FR', 'FR ZACHÓD'),
-('73', 'FR', 'FR WSCHÓD'),
-('74', 'FR', 'FR WSCHÓD'),
-('75', 'FR', 'FR CENTRUM'),
-('76', 'FR', 'FR PÓŁNOC'),
-('77', 'FR', 'FR CENTRUM'),
-('78', 'FR', 'FR CENTRUM'),
-('79', 'FR', 'FR ZACHÓD'),
-('80', 'FR', 'FR PÓŁNOC'),
-('81', 'FR', 'FR POŁUDNIE'),
-('82', 'FR', 'FR POŁUDNIE'),
-('83', 'FR', 'FR POŁUDNIE'),
-('84', 'FR', 'FR POŁUDNIE'),
-('85', 'FR', 'FR ZACHÓD'),
-('86', 'FR', 'FR ZACHÓD'),
-('87', 'FR', 'FR ZACHÓD'),
-('88', 'FR', 'FR WSCHÓD'),
-('89', 'FR', 'FR CENTRUM'),
-('90', 'FR', 'FR WSCHÓD'),
-('91', 'FR', 'FR CENTRUM'),
-('92', 'FR', 'FR CENTRUM'),
-('93', 'FR', 'FR CENTRUM'),
-('94', 'FR', 'FR CENTRUM'),
-('95', 'FR', 'FR CENTRUM'),
-('98', 'FR', 'FR POŁUDNIE'),
-('AB', 'GB', 'GB PÓŁNOC'),
-('AL', 'GB', 'GB POŁUDNIE'),
-('B', 'GB', 'GB CENTRUM'),
-('B1', 'GB', 'GB CENTRUM'),
-('B2', 'GB', 'GB CENTRUM'),
-('B4', 'GB', 'GB CENTRUM'),
-('B7', 'GB', 'GB CENTRUM'),
-('B9', 'GB', 'GB CENTRUM'),
-('BA', 'GB', 'GB CENTRUM'),
-('BB', 'GB', 'GB CENTRUM'),
-('BD', 'GB', 'GB CENTRUM'),
-('BH', 'GB', 'GB CENTRUM'),
-('BL', 'GB', 'GB CENTRUM'),
-('BN', 'GB', 'GB POŁUDNIE'),
-('BR', 'GB', 'GB POŁUDNIE'),
-('BS', 'GB', 'GB CENTRUM'),
-('CA', 'GB', 'GB PÓŁNOC'),
-('CB', 'GB', 'GB POŁUDNIE'),
-('CF', 'GB', 'GB CENTRUM'),
-('CH', 'GB', 'GB CENTRUM'),
-('CM', 'GB', 'GB POŁUDNIE'),
-('CO', 'GB', 'GB POŁUDNIE'),
-('CR', 'GB', 'GB POŁUDNIE'),
-('CT', 'GB', 'GB POŁUDNIE'),
-('CV', 'GB', 'GB CENTRUM'),
-('CW', 'GB', 'GB CENTRUM'),
-('DA', 'GB', 'GB POŁUDNIE'),
-('DD', 'GB', 'GB PÓŁNOC'),
-('DE', 'GB', 'GB CENTRUM'),
-('DG', 'GB', 'GB PÓŁNOC'),
-('DH', 'GB', 'GB PÓŁNOC'),
-('DL', 'GB', 'GB CENTRUM'),
-('DN', 'GB', 'GB CENTRUM'),
-('DT', 'GB', 'GB CENTRUM'),
-('DY', 'GB', 'GB CENTRUM'),
-('E', 'GB', 'GB POŁUDNIE'),
-('E1', 'GB', 'GB POŁUDNIE'),
-('EC', 'GB', 'GB POŁUDNIE'),
-('EH', 'GB', 'GB PÓŁNOC'),
-('EN', 'GB', 'GB POŁUDNIE'),
-('EX', 'GB', 'GB CENTRUM'),
-('FK', 'GB', 'GB PÓŁNOC'),
-('FY', 'GB', 'GB CENTRUM'),
-('G', 'GB', 'GB PÓŁNOC'),
-('G3', 'GB', 'GB PÓŁNOC'),
-('G7', 'GB', 'GB PÓŁNOC'),
-('GL', 'GB', 'GB CENTRUM'),
-('GU', 'GB', 'GB POŁUDNIE'),
-('HA', 'GB', 'GB POŁUDNIE'),
-('HD', 'GB', 'GB CENTRUM'),
-('HG', 'GB', 'GB CENTRUM'),
-('HP', 'GB', 'GB POŁUDNIE'),
-('HR', 'GB', 'GB CENTRUM'),
-('HU', 'GB', 'GB CENTRUM'),
-('HX', 'GB', 'GB CENTRUM'),
-('IG', 'GB', 'GB POŁUDNIE'),
-('IP', 'GB', 'GB POŁUDNIE'),
-('IV', 'GB', 'GB PÓŁNOC'),
-('KT', 'GB', 'GB POŁUDNIE'),
-('KW', 'GB', 'GB PÓŁNOC'),
-('KY', 'GB', 'GB PÓŁNOC'),
-('L', 'GB', 'GB CENTRUM'),
-('L2', 'GB', 'GB CENTRUM'),
-('L3', 'GB', 'GB CENTRUM'),
-('LA', 'GB', 'GB CENTRUM'),
-('LD', 'GB', 'GB CENTRUM'),
-('LE', 'GB', 'GB CENTRUM'),
-('LL', 'GB', 'GB CENTRUM'),
-('LN', 'GB', 'GB CENTRUM'),
-('LS', 'GB', 'GB CENTRUM'),
-('LU', 'GB', 'GB POŁUDNIE'),
-('M', 'GB', 'GB CENTRUM'),
-('M2', 'GB', 'GB CENTRUM'),
-('M3', 'GB', 'GB CENTRUM'),
-('M9', 'GB', 'GB CENTRUM'),
-('ME', 'GB', 'GB POŁUDNIE'),
-('MK', 'GB', 'GB CENTRUM'),
-('ML', 'GB', 'GB PÓŁNOC'),
-('N', 'GB', 'GB POŁUDNIE'),
-('N1', 'GB', 'GB POŁUDNIE'),
-('NE', 'GB', 'GB PÓŁNOC'),
-('NG', 'GB', 'GB CENTRUM'),
-('NN', 'GB', 'GB CENTRUM'),
-('NP', 'GB', 'GB CENTRUM'),
-('NR', 'GB', 'GB POŁUDNIE'),
-('NW', 'GB', 'GB POŁUDNIE'),
-('OL', 'GB', 'GB CENTRUM'),
-('OX', 'GB', 'GB CENTRUM'),
-('PA', 'GB', 'GB PÓŁNOC'),
-('PE', 'GB', 'GB CENTRUM'),
-('PH', 'GB', 'GB PÓŁNOC'),
-('PL', 'GB', 'GB CENTRUM'),
-('PO', 'GB', 'GB POŁUDNIE'),
-('PR', 'GB', 'GB CENTRUM'),
-('RG', 'GB', 'GB POŁUDNIE'),
-('RH', 'GB', 'GB POŁUDNIE'),
-('RM', 'GB', 'GB POŁUDNIE'),
-('S', 'GB', 'GB CENTRUM'),
-('S2', 'GB', 'GB CENTRUM'),
-('S6', 'GB', 'GB CENTRUM'),
-('S7', 'GB', 'GB CENTRUM'),
-('SA', 'GB', 'GB CENTRUM'),
-('SE', 'GB', 'GB POŁUDNIE'),
-('SG', 'GB', 'GB POŁUDNIE'),
-('SK', 'GB', 'GB CENTRUM'),
-('SL', 'GB', 'GB POŁUDNIE'),
-('SM', 'GB', 'GB POŁUDNIE'),
-('SN', 'GB', 'GB CENTRUM'),
-('SO', 'GB', 'GB POŁUDNIE'),
-('SP', 'GB', 'GB CENTRUM'),
-('SP', 'GB', 'GB CENTRUM'),
-('SS', 'GB', 'GB POŁUDNIE'),
-('ST', 'GB', 'GB CENTRUM'),
-('SW', 'GB', 'GB POŁUDNIE'),
-('SY', 'GB', 'GB CENTRUM'),
-('TA', 'GB', 'GB CENTRUM'),
-('TD', 'GB', 'GB PÓŁNOC'),
-('TF', 'GB', 'GB CENTRUM'),
-('TN', 'GB', 'GB POŁUDNIE'),
-('TQ', 'GB', 'GB CENTRUM'),
-('TR', 'GB', 'GB CENTRUM'),
-('TS', 'GB', 'GB CENTRUM'),
-('TW', 'GB', 'GB POŁUDNIE'),
-('UB', 'GB', 'GB POŁUDNIE'),
-('W', 'GB', 'GB POŁUDNIE'),
-('WA', 'GB', 'GB CENTRUM'),
-('WD', 'GB', 'GB POŁUDNIE'),
-('WF', 'GB', 'GB CENTRUM'),
-('WN', 'GB', 'GB CENTRUM'),
-('WR', 'GB', 'GB CENTRUM'),
-('WS', 'GB', 'GB CENTRUM'),
-('WV', 'GB', 'GB CENTRUM'),
-('YO', 'GB', 'GB CENTRUM'),
-('', 'GR', 'GR'),
-('', 'HR', 'HR'),
-('', 'HU', 'HU'),
-('', 'IE', 'IE'),
-('0', 'IT', 'IT CENTRUM'),
-('1', 'IT', 'IT CENTRUM'),
-('2', 'IT', 'IT PÓŁNOC'),
-('3', 'IT', 'IT PÓŁNOC'),
-('4', 'IT', 'IT PÓŁNOC'),
-('5', 'IT', 'IT CENTRUM'),
-('6', 'IT', 'IT POŁUDNIE'),
-('7', 'IT', 'IT POŁUDNIE'),
-('8', 'IT', 'IT POŁUDNIE'),
-('9', 'IT', 'IT POŁUDNIE'),
-('', 'LI', 'LI'),
-('', 'LU', 'LU'),
-('', 'MC', 'FR POŁUDNIE'),
-('', 'NL', 'NL'),
-('0', 'PL', 'PL WSCHÓD'),
-('1', 'PL', 'PL WSCHÓD'),
-('2', 'PL', 'PL WSCHÓD'),
-('3', 'PL', 'PL WSCHÓD'),
-('4', 'PL', 'PL WSCHÓD'),
-('5', 'PL', 'PL ZACHÓD'),
-('6', 'PL', 'PL ZACHÓD'),
-('7', 'PL', 'PL ZACHÓD'),
-('8', 'PL', 'PL WSCHÓD'),
-('9', 'PL', 'PL WSCHÓD'),
-('', 'PT', 'PT'),
-('', 'RO', 'RO'),
-('', 'SE', 'SE'),
-('1', 'SI', 'SI ZACHÓD'),
-('2', 'SI', 'SI WSCHÓD'),
-('3', 'SI', 'SI WSCHÓD'),
-('4', 'SI', 'SI ZACHÓD'),
-('5', 'SI', 'SI ZACHÓD'),
-('6', 'SI', 'SI ZACHÓD'),
-('7', 'SI', 'SI WSCHÓD'),
-('8', 'SI', 'SI WSCHÓD'),
-('9', 'SI', 'SI WSCHÓD'),
-('', 'SK', 'SK'),
-('M1', 'GB', 'GB CENTRUM'),
-('L1', 'GB', 'GB CENTRUM'),
-('L4', 'GB', 'GB CENTRUM'),
-('W3', 'GB', 'GB POŁUDNIE'),
-('G8', 'GB', 'GB PÓŁNOC'),
-('G6', 'GB', 'GB PÓŁNOC')
-('N9', 'GB', 'GB POŁUDNIE'),
-('WA', 'GB', 'GB CENTRUM'),
     """
-
-    # wyrażenie do złapania trójek (kod pocztowy, kod kraju, nazwa regionu)
-    pattern = r"\('([^']*)',\s*'([^']*)',\s*'([^']*)'\)"
-    matches = re.findall(pattern, region_data)
-
-    for postal_code, country_code, region in matches:
-        # null -> pusta stringa
-        if postal_code.lower() == "null":
-            postal_code = ""
-        # normalizacja kraju tak, jak w normalize_country
-        norm_country = normalize_country(country_code)
-        # zapisujemy pod ujednoliconym kluczem
-        REGION_MAPPING[(norm_country, postal_code)] = region
-
+    Wczytuje mapowania regionów z modułu app.config.regions.
+    Dane regionów są teraz przechowywane w osobnym pliku dla lepszej organizacji.
+    """
+    global REGION_MAPPING
+    REGION_MAPPING = parse_region_data(REGION_DATA_RAW, normalize_country)
     print(f"Wczytano {len(REGION_MAPPING)} mapowań regionów.")
+
 
 # Funkcja określająca region na podstawie kodu kraju i kodu pocztowego
 def get_region(country, postal_code):
-    postal_code = str(postal_code).strip()
-    prefix2 = postal_code[:2] if len(postal_code) >= 2 else postal_code
+    """
+    Określa region transportowy na podstawie kraju i kodu pocztowego.
+    Używa funkcji z modułu app.config.regions.
+    """
+    return get_region_for_location(REGION_MAPPING, country, postal_code, normalize_country)
 
-    # 1) spróbuj dwu-cyfrowego
-    region = REGION_MAPPING.get((country, prefix2))
-    if region:
-        return region
 
-    # 2) spróbuj jednocyfrowego
-    if len(postal_code) >= 1:
-        prefix1 = postal_code[0]
-        region = REGION_MAPPING.get((country, prefix1))
-        if region:
-            return region
-
-    # 3) fallback na kraj-bez-prefixu
-    return REGION_MAPPING.get((country, ""), None)
+# USUNIĘTO: Stare dane regionów inline - przeniesione do app/config/regions.py
 
 
 # Funkcja pobierająca stawki na podstawie relacji region-region
@@ -1233,10 +376,7 @@ sync_geo_cache_with_lookup()  # Synchronizuj cache
 load_region_mapping()  # Wczytaj mapowania regionów
 
 
-def clean_text(text):
-    text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
-    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
-    return text.lower().strip()
+# Funkcja clean_text jest teraz importowana z app.utils.formatting
 
 
 def get_geocoding_progress():
@@ -2436,53 +1576,9 @@ def get_all_locations_status(df):
     }
 
 
-def haversine(coord1, coord2):
-    if None in coord1 or None in coord2:
-        return None
-    R = 6371
-    lat1, lon1 = math.radians(coord1[0]), math.radians(coord1[1])
-    lat2, lon2 = math.radians(coord2[0]), math.radians(coord2[1])
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
-    return R * 2 * math.asin(math.sqrt(a))
+# Funkcje haversine, safe_float, format_currency, select_best_rate, calculate_fracht
+# są teraz importowane z app.utils
 
-
-def safe_float(value):
-    if pd.isna(value) or str(value).strip().lower() in ['nan', 'none', '']:
-        return None
-    try:
-        return float(str(value).strip().replace(',', '.'))
-    except (ValueError, TypeError):
-        return None
-
-
-def format_currency(value):
-    if value is None or pd.isna(value):
-        return None
-    try:
-        return round(float(value), 2)
-    except (ValueError, TypeError):
-        return None
-
-
-def select_best_rate(row, rate_columns):
-    for col in rate_columns:
-        rate = safe_float(row.get(col))
-        if rate is not None:
-            # Zwróć zarówno stawkę jak i okres
-            period = col.split('_')[-1] if '_' in col else '3m'  # Domyślnie 3m
-            return {'rate': rate, 'period': period}
-    return None
-
-
-def calculate_fracht(distance, rate):
-    if distance is None or rate is None:
-        return None
-    try:
-        return distance * rate
-    except TypeError:
-        return None
 
 def get_podlot(rates, region_rates=None):
     """
@@ -2842,9 +1938,7 @@ def get_best_rates(rates, region_rates):
         'hist_rate_info': hist_rate_info
     }
 
-def format_coordinates(lat, lon, default_text="Brak danych"):
-    """Formatuje współrzędne jako string"""
-    return f"{lat}, {lon}" if None not in (lat, lon) else default_text
+# Funkcja format_coordinates jest teraz importowana z app.utils.formatting
 
 
 def get_toll_cost(
